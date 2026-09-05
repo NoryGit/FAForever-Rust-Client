@@ -308,14 +308,18 @@ fn sync_connectivity(ctx: &ServiceCtx, out: &EventSink) {
 }
 
 fn sync_launch_preferences(ctx: &ServiceCtx, out: &EventSink) {
-    let (arguments, pipe_live_replay) = out.with_state(|state| {
+    let (arguments, pipe_live_replay, auto_generate_maps) = out.with_state(|state| {
         (
             state.settings.game.additional_arguments.clone(),
             state.settings.game.pipe_live_replay,
+            state.settings.game.auto_generate_maps,
         )
     });
     ctx.ports.process.set_additional_arguments(arguments);
     ctx.ports.replay.set_live_replay_pipe(pipe_live_replay);
+    // The replay port rebuilds a generated map before playback, and has to
+    // honour the same preference the live launcher does.
+    ctx.ports.replay.set_auto_generate_maps(auto_generate_maps);
 }
 
 /// Push the current paths into the launcher and report what actually exists.

@@ -492,6 +492,14 @@ pub fn real_ports() -> Ports {
     let updater: Arc<dyn GameUpdaterPort> =
         Arc::new(GameUpdaterClient::faf(tokens.clone(), process.clone()));
 
+    // The map generator is always real. It does spawn a subprocess (Java), but
+    // unlike the ice/process pair it needs no FA install and no adapter: and
+    // gating it would recreate exactly the bug that made the replay vault
+    // unreachable: matchmaker pools contain generated maps, so a client that
+    // cannot generate cannot start a ladder game. Missing Java surfaces as a
+    // clear per-run error instead.
+    let map_generator: Arc<dyn MapGeneratorPort> = Arc::new(NeroxisMapGenerator::faf());
+
     // Browsing the replay vault (`/data/game`) and listing
     // local `.fafreplay` files are a pure API read and a directory scan: they
     // need no game install and no subprocess, exactly like the maps/mods/
@@ -503,7 +511,16 @@ pub fn real_ports() -> Ports {
     // Settings → Paths when `replay_game_path` is unset or gone. So the replay
     // client always shares the real process port (one child-tracking slot, so
     // relaunching kills the previous FA).
-    let replay: Arc<dyn ReplayPort> = Arc::new(ReplayClient::faf(tokens.clone(), process.clone()));
+    //
+    // It shares the map generator for the same reason the launcher holds one: a
+    // replay recorded on a generated map has no vault archive to stage, so the
+    // only way to put that map on disk before playback is to run the generator
+    // again.
+    let replay: Arc<dyn ReplayPort> = Arc::new(ReplayClient::faf(
+        tokens.clone(),
+        process.clone(),
+        map_generator.clone(),
+    ));
 
     // Vault browsing + local install management is pure API + filesystem,
     // no subprocess; it just needs the same bearer token.
@@ -511,14 +528,6 @@ pub fn real_ports() -> Ports {
 
     // Same posture as maps: pure API + filesystem (game.prefs), no subprocess.
     let mods: Arc<dyn ModsPort> = Arc::new(ModsClient::faf(tokens.clone()));
-
-    // The map generator is always real. It does spawn a subprocess (Java), but
-    // unlike the ice/process pair it needs no FA install and no adapter: and
-    // gating it would recreate exactly the bug that made the replay vault
-    // unreachable: matchmaker pools contain generated maps, so a client that
-    // cannot generate cannot start a ladder game. Missing Java surfaces as a
-    // clear per-run error instead.
-    let map_generator: Arc<dyn MapGeneratorPort> = Arc::new(NeroxisMapGenerator::faf());
 
     // Same posture as maps: pure API, no subprocess.
     let leaderboard: Arc<dyn crate::ports::LeaderboardPort> =

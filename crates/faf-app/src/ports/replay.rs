@@ -106,4 +106,16 @@ pub trait ReplayPort: Send + Sync {
     ///
     /// The default is a no-op so a fake port does not have to care.
     fn set_live_replay_pipe(&self, _enabled: bool) {}
+
+    /// Whether a replay on a generated map may rebuild that map before
+    /// playback (`game/auto_generate_maps`).
+    ///
+    /// Pushed from the settings service for the same reason as
+    /// [`Self::set_live_replay_pipe`]: preparation happens inside the port,
+    /// which has no settings of its own, and the launcher already gates live
+    /// games on this preference. Defaults to enabled, matching the setting, so
+    /// a replay opened before the first settings sync still prepares.
+    ///
+    /// The default is a no-op so a fake port does not have to care.
+    fn set_auto_generate_maps(&self, _enabled: bool) {}
 }
