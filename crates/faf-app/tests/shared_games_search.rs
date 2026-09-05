@@ -27,7 +27,7 @@
 
 use std::sync::Arc;
 
-use faf_app::infra::{FakeGame, ReplayClient, TokenStore};
+use faf_app::infra::{FakeGame, FakeMapGenerator, ReplayClient, TokenStore};
 use faf_app::ports::ReplayPort;
 use faf_domain::protocol::replay_query::ReplayQuery;
 use faf_domain::state::VaultReplay;
@@ -35,7 +35,7 @@ use faf_domain::state::VaultReplay;
 fn client(token: String) -> ReplayClient {
     let tokens = TokenStore::new();
     tokens.set(token);
-    ReplayClient::faf(tokens, Arc::new(FakeGame))
+    ReplayClient::faf(tokens, Arc::new(FakeGame), Arc::new(FakeMapGenerator))
 }
 
 fn logins(replay: &VaultReplay) -> Vec<String> {

@@ -306,6 +306,14 @@ pub struct ReplayClient {
     /// of the local TCP proxy: the "Live Replays Workaround" setting, pushed in
     /// by the settings service (`ReplayPort::set_live_replay_pipe`).
     pipe_live_replay: std::sync::atomic::AtomicBool,
+    /// Rebuilds a replay's map when it was made by the Neroxis generator.
+    /// Generated maps exist in no vault, so staging cannot find them and the
+    /// only way to put one on disk is to run the generator again.
+    map_generator: Arc<dyn crate::ports::MapGeneratorPort>,
+    /// The `auto_generate_maps` setting, pushed in the same way as
+    /// [`Self::pipe_live_replay`]. Starts enabled to match the setting's own
+    /// default.
+    auto_generate_maps: std::sync::atomic::AtomicBool,
 }
 
 /// The cache key for a shared-games search: everything except which slice of
@@ -319,7 +327,12 @@ fn shared_games_key(query: &ReplayQuery) -> ReplayQuery {
 }
 
 impl ReplayClient {
-    pub fn new(config: ReplayConfig, tokens: TokenStore, process: Arc<dyn ProcessPort>) -> Self {
+    pub fn new(
+        config: ReplayConfig,
+        tokens: TokenStore,
+        process: Arc<dyn ProcessPort>,
+        map_generator: Arc<dyn crate::ports::MapGeneratorPort>,
+    ) -> Self {
         Self {
             install_dir: std::sync::Mutex::new(config.replay_target_dir.clone()),
             shared_games: std::sync::Mutex::new(None),
@@ -330,6 +343,8 @@ impl ReplayClient {
             process,
             playback_lock: Mutex::new(()),
             pipe_live_replay: std::sync::atomic::AtomicBool::new(false),
+            map_generator,
+            auto_generate_maps: std::sync::atomic::AtomicBool::new(true),
         }
     }
 
@@ -363,8 +378,96 @@ impl ReplayClient {
         }
     }
 
-    pub fn faf(tokens: TokenStore, process: Arc<dyn ProcessPort>) -> Self {
-        Self::new(ReplayConfig::faf(), tokens, process)
+    pub fn faf(
+        tokens: TokenStore,
+        process: Arc<dyn ProcessPort>,
+        map_generator: Arc<dyn crate::ports::MapGeneratorPort>,
+    ) -> Self {
+        Self::new(ReplayConfig::faf(), tokens, process, map_generator)
+    }
+
+    /// Put `map_folder` on disk before FA is asked to load it.
+    ///
+    /// Two different mechanisms behind one call, because the replay does not
+    /// say which kind of map it was played on:
+    ///
+    /// - A generated map exists in no vault and can only be rebuilt by running
+    ///   the Neroxis generator again, exactly as the live launcher's
+    ///   `ensure_generated_map` does for a game the server has already seated
+    ///   the player in.
+    /// - Anything else is staged from the vault CDN by
+    ///   [`game_updater::ensure_map_available`], which is a no-op for the
+    ///   base-game maps that ship inside the install.
+    ///
+    /// `Err` is reserved for a generated map that could not be produced. That
+    /// is not the same posture as vault staging, whose failure is only a
+    /// warning: a missing vault map may still be a base map FA can find on its
+    /// own, whereas a generated map that is not on disk is a guaranteed
+    /// `aborting session` a few seconds later, with nothing in the UI to
+    /// explain it. Saying so up front beats launching into that.
+    async fn ensure_replay_map(
+        &self,
+        target_dir: &Path,
+        map_folder: &str,
+    ) -> Result<Option<String>, String> {
+        use faf_domain::protocol::map_generator::is_generated_map;
+
+        if is_generated_map(map_folder) {
+            self.ensure_generated_map(map_folder).await?;
+            return Ok(None);
+        }
+
+        if let Err(e) = game_updater::ensure_map_available(
+            &self.http,
+            &self.config.content_base,
+            target_dir,
+            map_folder,
+        )
+        .await
+        {
+            return Ok(Some(format!("could not stage map {map_folder}: {e}")));
+        }
+        Ok(None)
+    }
+
+    /// Rebuild a generated map, unless it is already installed.
+    ///
+    /// Mirrors `services::launcher::ensure_generated_map`, minus the progress
+    /// events: this side of the boundary has no event sink. The run is logged
+    /// instead, since it routinely takes tens of seconds and a silent wait is
+    /// otherwise indistinguishable from a hang.
+    async fn ensure_generated_map(&self, map_name: &str) -> Result<(), String> {
+        use faf_domain::state::GeneratorStatus;
+
+        if self.map_generator.is_installed(map_name) {
+            return Ok(());
+        }
+        if !self
+            .auto_generate_maps
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
+            return Err(format!(
+                "this replay was played on the generated map {map_name}, which is not \
+                 installed, and automatic map generation is disabled in settings"
+            ));
+        }
+
+        tracing::info!(map_name, "generating map required by replay playback");
+        let mut updates = self
+            .map_generator
+            .generate_named(map_name.to_string())
+            .await;
+        let mut outcome = Err("the map generator produced no result".to_string());
+        while let Some(crate::ports::GeneratorUpdate::Status(status)) = updates.recv().await {
+            match status {
+                GeneratorStatus::Generated { .. } => outcome = Ok(()),
+                GeneratorStatus::Failed { reason } => {
+                    outcome = Err(format!("could not generate {map_name}: {reason}"))
+                }
+                _ => {}
+            }
+        }
+        outcome
     }
 
     async fn fetch_vault_replay(&self, uid: i32) -> Result<Vec<u8>, String> {
@@ -809,15 +912,8 @@ impl ReplayPort for ReplayClient {
                 // menu with no crash dialog and no error surfaced here either.
                 // `target.map` is the FAF technical map name (e.g. `hoey.v0002`),
                 // the same shape `ensure_map_available` expects.
-                if let Err(e) = game_updater::ensure_map_available(
-                    &self.http,
-                    &self.config.content_base,
-                    &target_dir,
-                    &target.map,
-                )
-                .await
-                {
-                    warning = Some(format!("could not stage map {}: {e}", target.map));
+                if let Some(warn) = self.ensure_replay_map(&target_dir, &target.map).await? {
+                    warning = Some(warn);
                 }
             }
             None => {
@@ -989,15 +1085,8 @@ impl ReplayPort for ReplayClient {
             // missing custom map is exactly what leaves FA stuck on a blank
             // loading screen with no explanation.
             if let Some(map_folder) = &replay.map_folder {
-                if let Err(e) = game_updater::ensure_map_available(
-                    &self.http,
-                    &self.config.content_base,
-                    target_dir,
-                    map_folder,
-                )
-                .await
-                {
-                    warning = Some(format!("could not stage map {map_folder}: {e}"));
+                if let Some(warn) = self.ensure_replay_map(target_dir, map_folder).await? {
+                    warning = Some(warn);
                 }
             }
         }
@@ -1187,6 +1276,11 @@ impl ReplayPort for ReplayClient {
 
     fn set_live_replay_pipe(&self, enabled: bool) {
         self.pipe_live_replay
+            .store(enabled, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    fn set_auto_generate_maps(&self, enabled: bool) {
+        self.auto_generate_maps
             .store(enabled, std::sync::atomic::Ordering::Relaxed);
     }
 
@@ -3258,7 +3352,207 @@ impl ReplayPort for FakeReplay {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ports::GeneratorUpdate;
+    use faf_domain::state::{
+        GeneratorOptionQuery, GeneratorOptions, GeneratorPreset, GeneratorStatus,
+    };
     use serde_json::json;
+
+    /// A real generated-map folder name, as it appears in a replay header.
+    const GENERATED_MAP: &str = "neroxis_map_generator_1.21.0_ualhhyfgnqw4u_cagaeaakbyaaaqd2";
+
+    /// Records what the launch path asked of the generator. Everything the
+    /// replay path never touches is left unimplemented rather than faked, so a
+    /// future call through one of those reads as a test bug, not as a pass.
+    struct StubGenerator {
+        installed: bool,
+        outcome: GeneratorStatus,
+        asked_for: std::sync::Mutex<Vec<String>>,
+    }
+
+    impl StubGenerator {
+        fn new(installed: bool, outcome: GeneratorStatus) -> Self {
+            Self {
+                installed,
+                outcome,
+                asked_for: std::sync::Mutex::new(Vec::new()),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl crate::ports::MapGeneratorPort for StubGenerator {
+        fn is_installed(&self, _map_name: &str) -> bool {
+            self.installed
+        }
+
+        async fn generate_named(&self, map_name: String) -> mpsc::Receiver<GeneratorUpdate> {
+            self.asked_for.lock().unwrap().push(map_name);
+            let (tx, rx) = mpsc::channel(4);
+            let _ = tx.send(GeneratorUpdate::Status(self.outcome.clone())).await;
+            rx
+        }
+
+        async fn generate(&self, _options: GeneratorOptions) -> mpsc::Receiver<GeneratorUpdate> {
+            unimplemented!("the replay path never generates from options")
+        }
+        async fn query_options(
+            &self,
+            _query: GeneratorOptionQuery,
+            _version: Option<String>,
+            _progress: Option<mpsc::Sender<GeneratorUpdate>>,
+        ) -> Result<Vec<String>, String> {
+            unimplemented!()
+        }
+        async fn preflight(&self, _options: GeneratorOptions) -> Result<String, String> {
+            unimplemented!()
+        }
+        async fn help(&self, _version: Option<String>) -> Result<String, String> {
+            unimplemented!()
+        }
+        fn cancel(&self) {
+            unimplemented!()
+        }
+        async fn save_preset(
+            &self,
+            _name: &str,
+            _options: &GeneratorOptions,
+        ) -> Result<(), String> {
+            unimplemented!()
+        }
+        async fn list_presets(&self) -> Vec<GeneratorPreset> {
+            unimplemented!()
+        }
+        async fn delete_preset(&self, _name: &str) -> Result<(), String> {
+            unimplemented!()
+        }
+        async fn latest_version(&self) -> Result<String, String> {
+            unimplemented!()
+        }
+        async fn available_versions(&self) -> Result<Vec<String>, String> {
+            unimplemented!()
+        }
+        async fn clean_up(&self, _protected: &[String]) -> Result<usize, String> {
+            unimplemented!()
+        }
+        async fn map_previews(
+            &self,
+            _map_names: &[String],
+        ) -> std::collections::HashMap<String, String> {
+            unimplemented!()
+        }
+    }
+
+    fn client_with(generator: Arc<StubGenerator>) -> ReplayClient {
+        ReplayClient::new(
+            replay_config(),
+            TokenStore::new(),
+            Arc::new(crate::infra::game::FakeGame),
+            generator,
+        )
+    }
+
+    /// The reported bug: a generated map has no `.vNNNN` suffix, so the vault
+    /// staging path classes it as a base-game map and does nothing at all. FA
+    /// then aborts the session on a map that was never written to disk.
+    #[tokio::test]
+    async fn a_replay_on_a_generated_map_rebuilds_it_before_launch() {
+        let generator = Arc::new(StubGenerator::new(
+            false,
+            GeneratorStatus::Generated {
+                maps: vec![GENERATED_MAP.to_string()],
+            },
+        ));
+        let client = client_with(generator.clone());
+
+        let warning = client
+            .ensure_replay_map(Path::new("unused"), GENERATED_MAP)
+            .await
+            .expect("generation succeeded, so playback must proceed");
+
+        assert_eq!(warning, None);
+        assert_eq!(
+            generator.asked_for.lock().unwrap().as_slice(),
+            [GENERATED_MAP.to_string()],
+            "the generator is the only source for this map; nothing else can supply it"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_installed_generated_map_is_not_regenerated() {
+        let generator = Arc::new(StubGenerator::new(
+            true,
+            GeneratorStatus::Failed {
+                reason: "must not run".into(),
+            },
+        ));
+        let client = client_with(generator.clone());
+
+        client
+            .ensure_replay_map(Path::new("unused"), GENERATED_MAP)
+            .await
+            .expect("an installed map needs no work");
+        assert!(generator.asked_for.lock().unwrap().is_empty());
+    }
+
+    /// Unlike a failed vault download, this cannot be downgraded to a warning:
+    /// launching anyway is a guaranteed `aborting session` with nothing on
+    /// screen to explain it.
+    #[tokio::test]
+    async fn a_generated_map_that_cannot_be_produced_stops_the_launch() {
+        let generator = Arc::new(StubGenerator::new(
+            false,
+            GeneratorStatus::Failed {
+                reason: "no java".into(),
+            },
+        ));
+        let client = client_with(generator);
+
+        let error = client
+            .ensure_replay_map(Path::new("unused"), GENERATED_MAP)
+            .await
+            .expect_err("an unloadable map must not reach FA");
+        assert!(error.contains("no java"), "{error}");
+    }
+
+    #[tokio::test]
+    async fn generation_disabled_in_settings_is_reported_rather_than_ignored() {
+        let generator = Arc::new(StubGenerator::new(
+            false,
+            GeneratorStatus::Failed {
+                reason: "must not run".into(),
+            },
+        ));
+        let client = client_with(generator.clone());
+        client.set_auto_generate_maps(false);
+
+        let error = client
+            .ensure_replay_map(Path::new("unused"), GENERATED_MAP)
+            .await
+            .expect_err("the setting forbids the only way to get this map");
+        assert!(error.contains("disabled in settings"), "{error}");
+        assert!(generator.asked_for.lock().unwrap().is_empty());
+    }
+
+    /// A base-game map is neither generated nor in the vault, so it must reach
+    /// FA untouched: no generator run, and no CDN request to 404 on.
+    #[tokio::test]
+    async fn a_base_game_map_needs_neither_the_generator_nor_the_vault() {
+        let generator = Arc::new(StubGenerator::new(
+            false,
+            GeneratorStatus::Failed {
+                reason: "must not run".into(),
+            },
+        ));
+        let client = client_with(generator.clone());
+
+        let warning = client
+            .ensure_replay_map(Path::new("unused"), "SCMP_009")
+            .await
+            .expect("a base map is always available");
+        assert_eq!(warning, None);
+        assert!(generator.asked_for.lock().unwrap().is_empty());
+    }
 
     fn replay_config() -> ReplayConfig {
         ReplayConfig {
