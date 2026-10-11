@@ -328,6 +328,7 @@ fn replays(command: &ReplayCommand) -> CommandPolicy {
 
 fn maps(command: &MapsCommand) -> CommandPolicy {
     match command {
+        MapsCommand::CancelVaultLoad => PRIORITY,
         MapsCommand::LoadVault => single_flight(Key::MapVault),
         MapsCommand::SearchVault { .. }
         | MapsCommand::LoadInstalled
@@ -360,6 +361,7 @@ fn map_generator(command: &MapGeneratorCommand) -> CommandPolicy {
 
 fn mods(command: &ModsCommand) -> CommandPolicy {
     match command {
+        ModsCommand::CancelVaultLoad => PRIORITY,
         ModsCommand::LoadVault | ModsCommand::ReloadVault => single_flight(Key::ModVault),
         ModsCommand::SearchVault { .. }
         | ModsCommand::LoadInstalled
@@ -486,6 +488,7 @@ fn training(command: &TrainingCommand) -> CommandPolicy {
 
 fn tutorials(command: &TutorialsCommand) -> CommandPolicy {
     match command {
+        TutorialsCommand::CancelLaunch => PRIORITY,
         TutorialsCommand::Load | TutorialsCommand::Select { .. } => ORDINARY,
         TutorialsCommand::Launch { .. } => single_flight(Key::TutorialLaunch),
     }
@@ -521,6 +524,7 @@ fn uploads(command: &UploadsCommand) -> CommandPolicy {
 
 fn galactic_war(command: &GalacticWarCommand) -> CommandPolicy {
     match command {
+        GalacticWarCommand::CancelInstall => PRIORITY,
         GalacticWarCommand::Refresh | GalacticWarCommand::RefreshStatistics => ORDINARY,
         GalacticWarCommand::Install | GalacticWarCommand::Play => single_flight(Key::GalacticWar),
     }

@@ -77,6 +77,7 @@ const INITIAL: AppState = {
   maps: {
     vault: [],
     vaultStatus: { type: "idle" },
+    vaultProgress: null,
     browse: [],
     browseStatus: { type: "idle" },
     browseQuery: EMPTY_MAP_QUERY,
@@ -167,6 +168,7 @@ const INITIAL: AppState = {
   mods: {
     vault: [],
     vaultStatus: { type: "idle" },
+    vaultProgress: null,
     browse: [],
     browseStatus: { type: "idle" },
     browseQuery: EMPTY_MOD_QUERY,

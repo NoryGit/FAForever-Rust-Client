@@ -37,9 +37,9 @@ use faf_domain::state::{
 use serde_json::Value;
 
 use crate::infra::jsonapi::{
-    fetch_all_pages, fetch_document, find_rel_resource, meta_page_i32, patch_resource, rel_target,
-    rel_targets, resource_index, total_pages, value_bool, value_f64, value_i32, value_string,
-    JsonApiDoc, JsonApiResource,
+    fetch_all_pages_with_progress, fetch_document, find_rel_resource, meta_page_i32,
+    patch_resource, rel_target, rel_targets, resource_index, total_pages, value_bool, value_f64,
+    value_i32, value_string, JsonApiDoc, JsonApiResource,
 };
 use crate::infra::review_totals::{self, Subject};
 use crate::infra::vault_install::{
@@ -122,6 +122,13 @@ impl MapsClient {
 #[async_trait]
 impl MapsPort for MapsClient {
     async fn list_vault(&self) -> Result<Vec<VaultMap>, String> {
+        self.list_vault_with_progress(None).await
+    }
+
+    async fn list_vault_with_progress(
+        &self,
+        progress: Option<tokio::sync::mpsc::Sender<faf_domain::state::maps::CatalogueProgress>>,
+    ) -> Result<Vec<VaultMap>, String> {
         let token = self
             .tokens
             .get()
@@ -137,11 +144,19 @@ impl MapsPort for MapsClient {
         // `MAX_VAULT_PAGES` bounds the worst case; a page is `VAULT_PAGE_SIZE`
         // maps.
         let api_base = self.config.api_base.clone();
-        let docs = fetch_all_pages(
+        let docs = fetch_all_pages_with_progress(
             &self.http,
             &token,
             MAX_VAULT_PAGES,
             VAULT_PAGE_SIZE,
+            |pages, total_pages| {
+                if let Some(progress) = &progress {
+                    let _ = progress.try_send(faf_domain::state::maps::CatalogueProgress {
+                        pages,
+                        total_pages,
+                    });
+                }
+            },
             |page| {
                 let mut url = url::Url::parse(&format!("{api_base}/data/map"))
                     .map_err(|e| format!("invalid API base: {e}"))?;
@@ -410,6 +425,9 @@ async fn list_installed_dir(dir: &std::path::Path) -> Result<Vec<InstalledMap>, 
         }
         let folder_path = entry.path();
         let folder_name = entry.file_name().to_string_lossy().to_lowercase();
+        if crate::infra::vault_install::is_install_staging_name(&folder_name) {
+            continue;
+        }
 
         let scenario_info = find_and_parse_scenario_lua(&folder_path).await;
         let display_name = scenario_info
@@ -1254,6 +1272,9 @@ mod tests {
             .await
             .unwrap();
         tokio::fs::write(dir.join("not_a_dir.txt"), b"x")
+            .await
+            .unwrap();
+        tokio::fs::create_dir_all(dir.join(".faf-install-0123456789abcdef"))
             .await
             .unwrap();
 

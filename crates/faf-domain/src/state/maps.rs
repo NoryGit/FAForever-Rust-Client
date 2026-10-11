@@ -126,6 +126,7 @@ pub struct MatchmakerMapPool {
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize, Type)]
 #[serde(tag = "type", content = "payload", rename_all = "camelCase")]
 pub enum MapListStatus {
+    Cancelled,
     #[default]
     Idle,
     Loading,
@@ -200,6 +201,13 @@ impl LocalMapPreview {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct CatalogueProgress {
+    pub pages: u32,
+    pub total_pages: Option<u32>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct MapsState {
@@ -208,6 +216,8 @@ pub struct MapsState {
     /// deliberately not what the Maps tab browses; see `browse` below.
     pub vault: Vec<VaultMap>,
     pub vault_status: MapListStatus,
+    #[serde(default)]
+    pub vault_progress: Option<crate::state::maps::CatalogueProgress>,
     /// One page of a server-side vault search, which is what the Maps tab
     /// shows. Both reference clients browse this way rather than filtering a
     /// downloaded catalogue.
@@ -253,6 +263,10 @@ pub const MAX_LOCAL_PREVIEWS: usize = 128;
 #[serde(tag = "type", content = "payload", rename_all = "camelCase")]
 pub enum MapsEvent {
     VaultLoading,
+    VaultProgress {
+        progress: crate::state::maps::CatalogueProgress,
+    },
+    VaultCancelled,
     VaultSearching,
     /// One page of a vault search. Carries the query it answers so a late
     /// response cannot be mistaken for the current one.
@@ -342,11 +356,14 @@ pub enum MapsEvent {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
 #[serde(tag = "type", content = "payload", rename_all = "camelCase")]
 pub enum MapsCommand {
+    CancelVaultLoad,
     /// Fetch the whole catalogue once, as the folder-name lookup index.
     LoadVault,
     /// Fetch one page of a vault search, the way both reference clients
     /// browse. Submit-driven: sent on search, sort and page changes.
-    SearchVault { query: MapVaultQuery },
+    SearchVault {
+        query: MapVaultQuery,
+    },
     /// Scan the user's maps folder (mirrors `MapsManagerDialog::setup_maplist`).
     LoadInstalled,
     /// Look maps up by folder name that the catalogue does not hold (#323).
@@ -360,7 +377,9 @@ pub enum MapsCommand {
     /// thumbnail URL is the only reliable address, so the UI asks for it once a
     /// tile has run out of other art.
     #[serde(rename_all = "camelCase")]
-    ResolveVaultFolders { folder_names: Vec<String> },
+    ResolveVaultFolders {
+        folder_names: Vec<String>,
+    },
     /// Read preview art straight out of the named installed map folders.
     ///
     /// On demand rather than with the folder scan: a full maps folder is
@@ -369,9 +388,13 @@ pub enum MapsCommand {
     /// about to show, and each folder is read once for good: both sizes at a
     /// time, so a tile and a detail pane never race to re-read the same map.
     #[serde(rename_all = "camelCase")]
-    LoadLocalPreviews { folder_names: Vec<String> },
+    LoadLocalPreviews {
+        folder_names: Vec<String>,
+    },
     #[serde(rename_all = "camelCase")]
-    LoadMatchmakerPools { queue_name: String },
+    LoadMatchmakerPools {
+        queue_name: String,
+    },
     /// Download and extract a map version's zip (mirrors `maps._doDownloadMap`).
     #[serde(rename_all = "camelCase")]
     InstallMap {
@@ -380,7 +403,9 @@ pub enum MapsCommand {
     },
     /// Delete a map folder (mirrors `MapsManagerDialog::delete_map`).
     #[serde(rename_all = "camelCase")]
-    UninstallMap { folder_name: String },
+    UninstallMap {
+        folder_name: String,
+    },
     /// Withdraw a map version from the vault, or put it back (mirrors
     /// `MapService.hideMapVersion`, which only ever hides).
     ///
@@ -390,12 +415,23 @@ pub enum MapsCommand {
     /// carries the flag rather than assuming, because the client is not the
     /// authority on that: the server is.
     #[serde(rename_all = "camelCase")]
-    SetMapVersionHidden { version_id: i32, hidden: bool },
+    SetMapVersionHidden {
+        version_id: i32,
+        hidden: bool,
+    },
 }
 
 pub fn reduce(state: &mut MapsState, event: &MapsEvent) {
     match event {
-        MapsEvent::VaultLoading => state.vault_status = MapListStatus::Loading,
+        MapsEvent::VaultLoading => {
+            state.vault_status = MapListStatus::Loading;
+            state.vault_progress = None;
+        }
+        MapsEvent::VaultProgress { progress } => state.vault_progress = Some(progress.clone()),
+        MapsEvent::VaultCancelled => {
+            state.vault_status = MapListStatus::Cancelled;
+            state.vault_progress = None;
+        }
         MapsEvent::VaultLoaded { maps } => {
             // The catalogue arrives once, after a crawl of the whole vault
             // that takes long enough for the Play tab to have looked up the

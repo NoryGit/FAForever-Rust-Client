@@ -2,8 +2,12 @@ import type { ModsEvent, ModsState } from "../../ipc/bindings";
 
 export function reduceMods(state: ModsState, event: ModsEvent): ModsState {
   switch (event.type) {
+    case "vaultProgress":
+      return { ...state, vaultProgress: event.payload.progress };
+    case "vaultCancelled":
+      return { ...state, vaultStatus: { type: "cancelled" }, vaultProgress: null };
     case "vaultLoading":
-      return { ...state, vaultStatus: { type: "loading" } };
+      return { ...state, vaultStatus: { type: "loading" }, vaultProgress: null };
     case "vaultLoaded":
       return { ...state, vault: event.payload.mods, vaultStatus: { type: "ready" } };
     case "vaultLoadFailed":

@@ -6,7 +6,7 @@
 
 use faf_domain::state::{MapListStatus, MapsCommand, MapsEvent};
 
-use crate::runtime::{EventSink, LatestRequest, ServiceCtx};
+use crate::runtime::{CancellationSlot, EventSink, LatestRequest, ServiceCtx};
 
 /// The map vault's request generation. Owned by this service.
 #[derive(Default)]
@@ -15,10 +15,12 @@ pub struct MapsContext {
     /// after a fast later one would otherwise replace its page, its totals or
     /// its error with results for filters no longer on screen.
     search_generation: LatestRequest,
+    catalogue: CancellationSlot,
 }
 
 pub async fn handle(cmd: MapsCommand, ctx: &ServiceCtx, out: &EventSink) {
     match cmd {
+        MapsCommand::CancelVaultLoad => ctx.maps.catalogue.cancel(),
         MapsCommand::LoadVault => {
             crate::runtime::expect_admitted(crate::runtime::Key::MapVault);
             // Crawling the whole catalogue is the most expensive thing this
@@ -36,6 +38,7 @@ pub async fn handle(cmd: MapsCommand, ctx: &ServiceCtx, out: &EventSink) {
             if out.with_state(|state| matches!(state.maps.vault_status, MapListStatus::Ready)) {
                 return;
             }
+            let cancel = ctx.maps.catalogue.begin();
             out.emit(MapsEvent::VaultLoading);
             // Logged both ways, with how long it took: the crawl is many pages,
             // one failed page fails it, and every view that mounts afterwards
@@ -43,7 +46,24 @@ pub async fn handle(cmd: MapsCommand, ctx: &ServiceCtx, out: &EventSink) {
             // keeps coming back left nothing to read afterwards.
             let started = std::time::Instant::now();
             tracing::info!("map vault: loading the catalogue");
-            match ctx.ports.maps.list_vault().await {
+            let (progress_tx, mut progress_rx) = tokio::sync::mpsc::channel(32);
+            let request = ctx.ports.maps.list_vault_with_progress(Some(progress_tx));
+            tokio::pin!(request);
+            let result = loop {
+                tokio::select! {
+                    biased;
+                    () = cancel.cancelled() => {
+                        out.emit(MapsEvent::VaultCancelled);
+                        return;
+                    }
+                    result = &mut request => break result,
+                    Some(progress) = progress_rx.recv() => out.emit(MapsEvent::VaultProgress { progress }),
+                }
+            };
+            while let Ok(progress) = progress_rx.try_recv() {
+                out.emit(MapsEvent::VaultProgress { progress });
+            }
+            match result {
                 Ok(maps) => {
                     tracing::info!(
                         maps = maps.len(),

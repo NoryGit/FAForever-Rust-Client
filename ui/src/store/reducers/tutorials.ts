@@ -2,6 +2,8 @@ import type { TutorialsEvent, TutorialsState } from "../../ipc/bindings";
 
 export function reduceTutorials(state: TutorialsState, event: TutorialsEvent): TutorialsState {
   switch (event.type) {
+    case "launchCancelled":
+      return { ...state, launch: { type: "idle" } };
     case "loading":
       return { ...state, status: { type: "loading" } };
     case "loaded": {

@@ -1,6 +1,621 @@
 {
   "cases": [
     {
+      "name": "background catalogue progress, cancellation and retry",
+      "steps": [
+        {
+          "event": {
+            "event": {
+              "type": "vaultLoading"
+            },
+            "kind": "Maps"
+          },
+          "expected": {
+            "browse": [],
+            "browseQuery": {
+              "after": "",
+              "author": "",
+              "authorId": null,
+              "before": "",
+              "height": 0,
+              "includeHidden": false,
+              "maxPlayers": null,
+              "maxRatingTenths": null,
+              "minPlayers": null,
+              "minRatingTenths": null,
+              "page": 1,
+              "pageSize": 36,
+              "ranked": null,
+              "recommended": false,
+              "search": "",
+              "sortBy": "rating",
+              "sortDescending": true,
+              "width": 0
+            },
+            "browseStatus": {
+              "type": "idle"
+            },
+            "browseTotalPages": null,
+            "browseTotalRecords": null,
+            "installStatus": {
+              "type": "idle"
+            },
+            "installed": [],
+            "installedStatus": {
+              "type": "idle"
+            },
+            "localPreviewOrder": [],
+            "localPreviews": {},
+            "matchmakerPools": {},
+            "matchmakerPoolsStatus": {
+              "type": "idle"
+            },
+            "vault": [],
+            "vaultProgress": null,
+            "vaultStatus": {
+              "type": "loading"
+            },
+            "visibilityStatus": {
+              "type": "idle"
+            }
+          }
+        },
+        {
+          "event": {
+            "event": {
+              "payload": {
+                "progress": {
+                  "pages": 2,
+                  "totalPages": 5
+                }
+              },
+              "type": "vaultProgress"
+            },
+            "kind": "Maps"
+          },
+          "expected": {
+            "browse": [],
+            "browseQuery": {
+              "after": "",
+              "author": "",
+              "authorId": null,
+              "before": "",
+              "height": 0,
+              "includeHidden": false,
+              "maxPlayers": null,
+              "maxRatingTenths": null,
+              "minPlayers": null,
+              "minRatingTenths": null,
+              "page": 1,
+              "pageSize": 36,
+              "ranked": null,
+              "recommended": false,
+              "search": "",
+              "sortBy": "rating",
+              "sortDescending": true,
+              "width": 0
+            },
+            "browseStatus": {
+              "type": "idle"
+            },
+            "browseTotalPages": null,
+            "browseTotalRecords": null,
+            "installStatus": {
+              "type": "idle"
+            },
+            "installed": [],
+            "installedStatus": {
+              "type": "idle"
+            },
+            "localPreviewOrder": [],
+            "localPreviews": {},
+            "matchmakerPools": {},
+            "matchmakerPoolsStatus": {
+              "type": "idle"
+            },
+            "vault": [],
+            "vaultProgress": {
+              "pages": 2,
+              "totalPages": 5
+            },
+            "vaultStatus": {
+              "type": "loading"
+            },
+            "visibilityStatus": {
+              "type": "idle"
+            }
+          }
+        },
+        {
+          "event": {
+            "event": {
+              "type": "vaultCancelled"
+            },
+            "kind": "Maps"
+          },
+          "expected": {
+            "browse": [],
+            "browseQuery": {
+              "after": "",
+              "author": "",
+              "authorId": null,
+              "before": "",
+              "height": 0,
+              "includeHidden": false,
+              "maxPlayers": null,
+              "maxRatingTenths": null,
+              "minPlayers": null,
+              "minRatingTenths": null,
+              "page": 1,
+              "pageSize": 36,
+              "ranked": null,
+              "recommended": false,
+              "search": "",
+              "sortBy": "rating",
+              "sortDescending": true,
+              "width": 0
+            },
+            "browseStatus": {
+              "type": "idle"
+            },
+            "browseTotalPages": null,
+            "browseTotalRecords": null,
+            "installStatus": {
+              "type": "idle"
+            },
+            "installed": [],
+            "installedStatus": {
+              "type": "idle"
+            },
+            "localPreviewOrder": [],
+            "localPreviews": {},
+            "matchmakerPools": {},
+            "matchmakerPoolsStatus": {
+              "type": "idle"
+            },
+            "vault": [],
+            "vaultProgress": null,
+            "vaultStatus": {
+              "type": "cancelled"
+            },
+            "visibilityStatus": {
+              "type": "idle"
+            }
+          }
+        },
+        {
+          "event": {
+            "event": {
+              "type": "vaultLoading"
+            },
+            "kind": "Maps"
+          },
+          "expected": {
+            "browse": [],
+            "browseQuery": {
+              "after": "",
+              "author": "",
+              "authorId": null,
+              "before": "",
+              "height": 0,
+              "includeHidden": false,
+              "maxPlayers": null,
+              "maxRatingTenths": null,
+              "minPlayers": null,
+              "minRatingTenths": null,
+              "page": 1,
+              "pageSize": 36,
+              "ranked": null,
+              "recommended": false,
+              "search": "",
+              "sortBy": "rating",
+              "sortDescending": true,
+              "width": 0
+            },
+            "browseStatus": {
+              "type": "idle"
+            },
+            "browseTotalPages": null,
+            "browseTotalRecords": null,
+            "installStatus": {
+              "type": "idle"
+            },
+            "installed": [],
+            "installedStatus": {
+              "type": "idle"
+            },
+            "localPreviewOrder": [],
+            "localPreviews": {},
+            "matchmakerPools": {},
+            "matchmakerPoolsStatus": {
+              "type": "idle"
+            },
+            "vault": [],
+            "vaultProgress": null,
+            "vaultStatus": {
+              "type": "loading"
+            },
+            "visibilityStatus": {
+              "type": "idle"
+            }
+          }
+        },
+        {
+          "event": {
+            "event": {
+              "payload": {
+                "maps": []
+              },
+              "type": "vaultLoaded"
+            },
+            "kind": "Maps"
+          },
+          "expected": {
+            "browse": [],
+            "browseQuery": {
+              "after": "",
+              "author": "",
+              "authorId": null,
+              "before": "",
+              "height": 0,
+              "includeHidden": false,
+              "maxPlayers": null,
+              "maxRatingTenths": null,
+              "minPlayers": null,
+              "minRatingTenths": null,
+              "page": 1,
+              "pageSize": 36,
+              "ranked": null,
+              "recommended": false,
+              "search": "",
+              "sortBy": "rating",
+              "sortDescending": true,
+              "width": 0
+            },
+            "browseStatus": {
+              "type": "idle"
+            },
+            "browseTotalPages": null,
+            "browseTotalRecords": null,
+            "installStatus": {
+              "type": "idle"
+            },
+            "installed": [],
+            "installedStatus": {
+              "type": "idle"
+            },
+            "localPreviewOrder": [],
+            "localPreviews": {},
+            "matchmakerPools": {},
+            "matchmakerPoolsStatus": {
+              "type": "idle"
+            },
+            "vault": [],
+            "vaultProgress": null,
+            "vaultStatus": {
+              "type": "ready"
+            },
+            "visibilityStatus": {
+              "type": "idle"
+            }
+          }
+        },
+        {
+          "event": {
+            "event": {
+              "type": "vaultLoading"
+            },
+            "kind": "Mods"
+          },
+          "expected": {
+            "browse": [],
+            "browseQuery": {
+              "after": "",
+              "author": "",
+              "before": "",
+              "dateFieldUpdated": true,
+              "exactName": false,
+              "maxRatingTenths": null,
+              "minRatingTenths": null,
+              "modType": "",
+              "page": 1,
+              "pageSize": 36,
+              "ranked": null,
+              "recommended": false,
+              "search": "",
+              "searchDescriptions": false,
+              "sortBy": "rating",
+              "sortDescending": true,
+              "uploaderId": null
+            },
+            "browseStatus": {
+              "type": "idle"
+            },
+            "browseTotalPages": null,
+            "browseTotalRecords": null,
+            "downloadSizes": {},
+            "installStatus": {
+              "type": "idle"
+            },
+            "installed": [],
+            "installedStatus": {
+              "type": "idle"
+            },
+            "toggleStatus": {
+              "type": "idle"
+            },
+            "vault": [],
+            "vaultProgress": null,
+            "vaultStatus": {
+              "type": "loading"
+            }
+          }
+        },
+        {
+          "event": {
+            "event": {
+              "payload": {
+                "progress": {
+                  "pages": 1,
+                  "totalPages": null
+                }
+              },
+              "type": "vaultProgress"
+            },
+            "kind": "Mods"
+          },
+          "expected": {
+            "browse": [],
+            "browseQuery": {
+              "after": "",
+              "author": "",
+              "before": "",
+              "dateFieldUpdated": true,
+              "exactName": false,
+              "maxRatingTenths": null,
+              "minRatingTenths": null,
+              "modType": "",
+              "page": 1,
+              "pageSize": 36,
+              "ranked": null,
+              "recommended": false,
+              "search": "",
+              "searchDescriptions": false,
+              "sortBy": "rating",
+              "sortDescending": true,
+              "uploaderId": null
+            },
+            "browseStatus": {
+              "type": "idle"
+            },
+            "browseTotalPages": null,
+            "browseTotalRecords": null,
+            "downloadSizes": {},
+            "installStatus": {
+              "type": "idle"
+            },
+            "installed": [],
+            "installedStatus": {
+              "type": "idle"
+            },
+            "toggleStatus": {
+              "type": "idle"
+            },
+            "vault": [],
+            "vaultProgress": {
+              "pages": 1,
+              "totalPages": null
+            },
+            "vaultStatus": {
+              "type": "loading"
+            }
+          }
+        },
+        {
+          "event": {
+            "event": {
+              "type": "vaultCancelled"
+            },
+            "kind": "Mods"
+          },
+          "expected": {
+            "browse": [],
+            "browseQuery": {
+              "after": "",
+              "author": "",
+              "before": "",
+              "dateFieldUpdated": true,
+              "exactName": false,
+              "maxRatingTenths": null,
+              "minRatingTenths": null,
+              "modType": "",
+              "page": 1,
+              "pageSize": 36,
+              "ranked": null,
+              "recommended": false,
+              "search": "",
+              "searchDescriptions": false,
+              "sortBy": "rating",
+              "sortDescending": true,
+              "uploaderId": null
+            },
+            "browseStatus": {
+              "type": "idle"
+            },
+            "browseTotalPages": null,
+            "browseTotalRecords": null,
+            "downloadSizes": {},
+            "installStatus": {
+              "type": "idle"
+            },
+            "installed": [],
+            "installedStatus": {
+              "type": "idle"
+            },
+            "toggleStatus": {
+              "type": "idle"
+            },
+            "vault": [],
+            "vaultProgress": null,
+            "vaultStatus": {
+              "type": "cancelled"
+            }
+          }
+        },
+        {
+          "event": {
+            "event": {
+              "type": "vaultLoading"
+            },
+            "kind": "Mods"
+          },
+          "expected": {
+            "browse": [],
+            "browseQuery": {
+              "after": "",
+              "author": "",
+              "before": "",
+              "dateFieldUpdated": true,
+              "exactName": false,
+              "maxRatingTenths": null,
+              "minRatingTenths": null,
+              "modType": "",
+              "page": 1,
+              "pageSize": 36,
+              "ranked": null,
+              "recommended": false,
+              "search": "",
+              "searchDescriptions": false,
+              "sortBy": "rating",
+              "sortDescending": true,
+              "uploaderId": null
+            },
+            "browseStatus": {
+              "type": "idle"
+            },
+            "browseTotalPages": null,
+            "browseTotalRecords": null,
+            "downloadSizes": {},
+            "installStatus": {
+              "type": "idle"
+            },
+            "installed": [],
+            "installedStatus": {
+              "type": "idle"
+            },
+            "toggleStatus": {
+              "type": "idle"
+            },
+            "vault": [],
+            "vaultProgress": null,
+            "vaultStatus": {
+              "type": "loading"
+            }
+          }
+        },
+        {
+          "event": {
+            "event": {
+              "payload": {
+                "mods": []
+              },
+              "type": "vaultLoaded"
+            },
+            "kind": "Mods"
+          },
+          "expected": {
+            "browse": [],
+            "browseQuery": {
+              "after": "",
+              "author": "",
+              "before": "",
+              "dateFieldUpdated": true,
+              "exactName": false,
+              "maxRatingTenths": null,
+              "minRatingTenths": null,
+              "modType": "",
+              "page": 1,
+              "pageSize": 36,
+              "ranked": null,
+              "recommended": false,
+              "search": "",
+              "searchDescriptions": false,
+              "sortBy": "rating",
+              "sortDescending": true,
+              "uploaderId": null
+            },
+            "browseStatus": {
+              "type": "idle"
+            },
+            "browseTotalPages": null,
+            "browseTotalRecords": null,
+            "downloadSizes": {},
+            "installStatus": {
+              "type": "idle"
+            },
+            "installed": [],
+            "installedStatus": {
+              "type": "idle"
+            },
+            "toggleStatus": {
+              "type": "idle"
+            },
+            "vault": [],
+            "vaultProgress": null,
+            "vaultStatus": {
+              "type": "ready"
+            }
+          }
+        },
+        {
+          "event": {
+            "event": {
+              "payload": {
+                "detail": "Preparing",
+                "tutorialId": 7
+              },
+              "type": "launchPreparing"
+            },
+            "kind": "Tutorials"
+          },
+          "expected": {
+            "categories": [],
+            "launch": {
+              "payload": {
+                "detail": "Preparing",
+                "tutorialId": 7
+              },
+              "type": "preparing"
+            },
+            "selectedId": null,
+            "status": {
+              "type": "idle"
+            },
+            "tutorials": []
+          }
+        },
+        {
+          "event": {
+            "event": {
+              "type": "launchCancelled"
+            },
+            "kind": "Tutorials"
+          },
+          "expected": {
+            "categories": [],
+            "launch": {
+              "type": "idle"
+            },
+            "selectedId": null,
+            "status": {
+              "type": "idle"
+            },
+            "tutorials": []
+          }
+        }
+      ]
+    },
+    {
       "name": "a channel goes live, is announced once, and goes off air",
       "steps": [
         {
@@ -39414,6 +40029,7 @@
               "type": "idle"
             },
             "vault": [],
+            "vaultProgress": null,
             "vaultStatus": {
               "type": "loading"
             },
@@ -39473,6 +40089,7 @@
               "type": "idle"
             },
             "vault": [],
+            "vaultProgress": null,
             "vaultStatus": {
               "payload": {
                 "reason": "503"
@@ -39532,6 +40149,7 @@
               "type": "idle"
             },
             "vault": [],
+            "vaultProgress": null,
             "vaultStatus": {
               "payload": {
                 "reason": "503"
@@ -39616,6 +40234,7 @@
               "type": "idle"
             },
             "vault": [],
+            "vaultProgress": null,
             "vaultStatus": {
               "payload": {
                 "reason": "503"
@@ -39681,6 +40300,7 @@
               "type": "idle"
             },
             "vault": [],
+            "vaultProgress": null,
             "vaultStatus": {
               "payload": {
                 "reason": "503"
@@ -39743,6 +40363,7 @@
               "type": "idle"
             },
             "vault": [],
+            "vaultProgress": null,
             "vaultStatus": {
               "payload": {
                 "reason": "503"
@@ -39830,6 +40451,7 @@
               "type": "idle"
             },
             "vault": [],
+            "vaultProgress": null,
             "vaultStatus": {
               "payload": {
                 "reason": "503"
@@ -39909,6 +40531,7 @@
               "type": "idle"
             },
             "vault": [],
+            "vaultProgress": null,
             "vaultStatus": {
               "type": "idle"
             },
@@ -39989,6 +40612,7 @@
               "type": "idle"
             },
             "vault": [],
+            "vaultProgress": null,
             "vaultStatus": {
               "type": "idle"
             },
@@ -40177,6 +40801,7 @@
               "type": "idle"
             },
             "vault": [],
+            "vaultProgress": null,
             "vaultStatus": {
               "type": "idle"
             },
@@ -40287,6 +40912,7 @@
               "type": "idle"
             },
             "vault": [],
+            "vaultProgress": null,
             "vaultStatus": {
               "type": "idle"
             },
@@ -40401,6 +41027,7 @@
               "type": "idle"
             },
             "vault": [],
+            "vaultProgress": null,
             "vaultStatus": {
               "type": "idle"
             },
@@ -40511,6 +41138,7 @@
               "type": "idle"
             },
             "vault": [],
+            "vaultProgress": null,
             "vaultStatus": {
               "type": "idle"
             },
@@ -40624,6 +41252,7 @@
               "type": "idle"
             },
             "vault": [],
+            "vaultProgress": null,
             "vaultStatus": {
               "type": "idle"
             },
@@ -40734,6 +41363,7 @@
               "type": "idle"
             },
             "vault": [],
+            "vaultProgress": null,
             "vaultStatus": {
               "type": "idle"
             },
@@ -40850,6 +41480,7 @@
                 "width": 1024
               }
             ],
+            "vaultProgress": null,
             "vaultStatus": {
               "type": "ready"
             },
@@ -40986,6 +41617,7 @@
                 "width": 1024
               }
             ],
+            "vaultProgress": null,
             "vaultStatus": {
               "type": "ready"
             },
@@ -41147,6 +41779,7 @@
                 "width": 1024
               }
             ],
+            "vaultProgress": null,
             "vaultStatus": {
               "type": "ready"
             },
@@ -41208,6 +41841,7 @@
               "type": "idle"
             },
             "vault": [],
+            "vaultProgress": null,
             "vaultStatus": {
               "type": "loading"
             },
@@ -41319,6 +41953,7 @@
                 "width": 1024
               }
             ],
+            "vaultProgress": null,
             "vaultStatus": {
               "type": "loading"
             },
@@ -41480,6 +42115,7 @@
                 "width": 1024
               }
             ],
+            "vaultProgress": null,
             "vaultStatus": {
               "type": "ready"
             },
@@ -41641,6 +42277,7 @@
                 "width": 1024
               }
             ],
+            "vaultProgress": null,
             "vaultStatus": {
               "type": "ready"
             },
@@ -41802,6 +42439,7 @@
                 "width": 1024
               }
             ],
+            "vaultProgress": null,
             "vaultStatus": {
               "type": "ready"
             },
@@ -41965,6 +42603,7 @@
               "type": "idle"
             },
             "vault": [],
+            "vaultProgress": null,
             "vaultStatus": {
               "type": "idle"
             }
@@ -42039,6 +42678,7 @@
               "type": "idle"
             },
             "vault": [],
+            "vaultProgress": null,
             "vaultStatus": {
               "type": "idle"
             }
@@ -42095,6 +42735,7 @@
               "type": "idle"
             },
             "vault": [],
+            "vaultProgress": null,
             "vaultStatus": {
               "type": "idle"
             }
@@ -42148,6 +42789,7 @@
               "type": "idle"
             },
             "vault": [],
+            "vaultProgress": null,
             "vaultStatus": {
               "type": "idle"
             }
@@ -42207,6 +42849,7 @@
               "type": "idle"
             },
             "vault": [],
+            "vaultProgress": null,
             "vaultStatus": {
               "type": "idle"
             }
@@ -42276,6 +42919,7 @@
               "type": "idle"
             },
             "vault": [],
+            "vaultProgress": null,
             "vaultStatus": {
               "type": "idle"
             }
@@ -42336,6 +42980,7 @@
               "type": "idle"
             },
             "vault": [],
+            "vaultProgress": null,
             "vaultStatus": {
               "type": "idle"
             }
@@ -59387,6 +60032,7 @@
               "type": "idle"
             },
             "vault": [],
+            "vaultProgress": null,
             "vaultStatus": {
               "type": "idle"
             },
@@ -59468,6 +60114,7 @@
               "type": "idle"
             },
             "vault": [],
+            "vaultProgress": null,
             "vaultStatus": {
               "type": "idle"
             },
@@ -59559,6 +60206,7 @@
               "type": "idle"
             },
             "vault": [],
+            "vaultProgress": null,
             "vaultStatus": {
               "type": "idle"
             },
@@ -59644,6 +60292,7 @@
               "type": "idle"
             },
             "vault": [],
+            "vaultProgress": null,
             "vaultStatus": {
               "type": "idle"
             },
@@ -59729,6 +60378,7 @@
               "type": "idle"
             },
             "vault": [],
+            "vaultProgress": null,
             "vaultStatus": {
               "type": "idle"
             },
@@ -59814,6 +60464,7 @@
               "type": "idle"
             },
             "vault": [],
+            "vaultProgress": null,
             "vaultStatus": {
               "type": "idle"
             },
@@ -59915,6 +60566,7 @@
               "type": "idle"
             },
             "vault": [],
+            "vaultProgress": null,
             "vaultStatus": {
               "type": "idle"
             },
@@ -60007,6 +60659,7 @@
               "type": "idle"
             },
             "vault": [],
+            "vaultProgress": null,
             "vaultStatus": {
               "type": "idle"
             },
@@ -60097,6 +60750,7 @@
               "type": "idle"
             },
             "vault": [],
+            "vaultProgress": null,
             "vaultStatus": {
               "type": "idle"
             },
@@ -60178,6 +60832,7 @@
               "type": "idle"
             },
             "vault": [],
+            "vaultProgress": null,
             "vaultStatus": {
               "type": "idle"
             },
@@ -60245,6 +60900,7 @@
               "type": "idle"
             },
             "vault": [],
+            "vaultProgress": null,
             "vaultStatus": {
               "type": "idle"
             },
@@ -60318,6 +60974,7 @@
               "type": "idle"
             },
             "vault": [],
+            "vaultProgress": null,
             "vaultStatus": {
               "type": "idle"
             },
@@ -60379,6 +61036,7 @@
               "type": "loading"
             },
             "vault": [],
+            "vaultProgress": null,
             "vaultStatus": {
               "type": "idle"
             },
@@ -60483,6 +61141,7 @@
               "type": "ready"
             },
             "vault": [],
+            "vaultProgress": null,
             "vaultStatus": {
               "type": "idle"
             },
@@ -60562,6 +61221,7 @@
               "type": "loading"
             },
             "vault": [],
+            "vaultProgress": null,
             "vaultStatus": {
               "type": "idle"
             },
@@ -60688,6 +61348,7 @@
               "type": "ready"
             },
             "vault": [],
+            "vaultProgress": null,
             "vaultStatus": {
               "type": "idle"
             },
@@ -60789,6 +61450,7 @@
               "type": "loading"
             },
             "vault": [],
+            "vaultProgress": null,
             "vaultStatus": {
               "type": "idle"
             },
@@ -60896,6 +61558,7 @@
               "type": "failed"
             },
             "vault": [],
+            "vaultProgress": null,
             "vaultStatus": {
               "type": "idle"
             },
@@ -60980,6 +61643,7 @@
               "type": "ready"
             },
             "vault": [],
+            "vaultProgress": null,
             "vaultStatus": {
               "type": "idle"
             },
@@ -61038,6 +61702,7 @@
               "type": "idle"
             },
             "vault": [],
+            "vaultProgress": null,
             "vaultStatus": {
               "type": "loading"
             }
@@ -61177,6 +61842,7 @@
                 "versionId": 20
               }
             ],
+            "vaultProgress": null,
             "vaultStatus": {
               "type": "ready"
             }
@@ -61338,6 +62004,7 @@
                 "versionId": 20
               }
             ],
+            "vaultProgress": null,
             "vaultStatus": {
               "type": "ready"
             }
@@ -61453,6 +62120,7 @@
                 "versionId": 20
               }
             ],
+            "vaultProgress": null,
             "vaultStatus": {
               "type": "loading"
             }
@@ -61571,6 +62239,7 @@
                 "versionId": 20
               }
             ],
+            "vaultProgress": null,
             "vaultStatus": {
               "payload": {
                 "reason": "503"
@@ -61693,6 +62362,7 @@
                 "versionId": 10
               }
             ],
+            "vaultProgress": null,
             "vaultStatus": {
               "type": "ready"
             }
@@ -61748,6 +62418,7 @@
               "type": "idle"
             },
             "vault": [],
+            "vaultProgress": null,
             "vaultStatus": {
               "type": "idle"
             }
@@ -61823,6 +62494,7 @@
               "type": "idle"
             },
             "vault": [],
+            "vaultProgress": null,
             "vaultStatus": {
               "type": "idle"
             }
@@ -61890,6 +62562,7 @@
               "type": "idle"
             },
             "vault": [],
+            "vaultProgress": null,
             "vaultStatus": {
               "type": "idle"
             }
@@ -61957,6 +62630,7 @@
               "type": "idle"
             },
             "vault": [],
+            "vaultProgress": null,
             "vaultStatus": {
               "type": "idle"
             }
@@ -62024,6 +62698,7 @@
               "type": "idle"
             },
             "vault": [],
+            "vaultProgress": null,
             "vaultStatus": {
               "type": "idle"
             }
@@ -62119,6 +62794,7 @@
               "type": "idle"
             },
             "vault": [],
+            "vaultProgress": null,
             "vaultStatus": {
               "type": "idle"
             }
@@ -62196,6 +62872,7 @@
               "type": "toggling"
             },
             "vault": [],
+            "vaultProgress": null,
             "vaultStatus": {
               "type": "idle"
             }
@@ -62273,6 +62950,7 @@
               "type": "failed"
             },
             "vault": [],
+            "vaultProgress": null,
             "vaultStatus": {
               "type": "idle"
             }
@@ -62350,6 +63028,7 @@
               "type": "toggling"
             },
             "vault": [],
+            "vaultProgress": null,
             "vaultStatus": {
               "type": "idle"
             }
@@ -62445,6 +63124,7 @@
               "type": "idle"
             },
             "vault": [],
+            "vaultProgress": null,
             "vaultStatus": {
               "type": "idle"
             }
@@ -62522,6 +63202,7 @@
               "type": "idle"
             },
             "vault": [],
+            "vaultProgress": null,
             "vaultStatus": {
               "type": "idle"
             }
@@ -62597,6 +63278,7 @@
               "type": "idle"
             },
             "vault": [],
+            "vaultProgress": null,
             "vaultStatus": {
               "type": "idle"
             }
@@ -109247,6 +109929,7 @@
         "type": "idle"
       },
       "vault": [],
+      "vaultProgress": null,
       "vaultStatus": {
         "type": "idle"
       },
@@ -109292,6 +109975,7 @@
         "type": "idle"
       },
       "vault": [],
+      "vaultProgress": null,
       "vaultStatus": {
         "type": "idle"
       }

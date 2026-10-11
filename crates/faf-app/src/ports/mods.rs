@@ -30,6 +30,13 @@ pub trait ModsPort: Send + Sync {
     /// `MapsPort::list_vault`).
     async fn list_vault(&self) -> Result<Vec<VaultMod>, String>;
 
+    async fn list_vault_with_progress(
+        &self,
+        _progress: Option<tokio::sync::mpsc::Sender<faf_domain::state::maps::CatalogueProgress>>,
+    ) -> Result<Vec<VaultMod>, String> {
+        self.list_vault().await
+    }
+
     /// One page of a server-side vault search, as `MapsPort::search_vault`.
     async fn search_vault(&self, query: ModVaultQuery) -> Result<ModSearchPage, String>;
 
@@ -60,11 +67,9 @@ pub trait ModsPort: Send + Sync {
 
     /// Replace the version in `folder_name` with the one `uid` names.
     ///
-    /// Ordered so that nothing is lost when a step fails: the archive is
-    /// fetched first, and only a download that arrived removes the installed
-    /// copy. A mod that was enabled is enabled again afterwards under the new
-    /// version's uid, since `uninstall_mod` scrubs the old one out of
-    /// `game.prefs` and an update is not a request to turn the mod off.
+    /// The archive is fully extracted and validated in staging before the
+    /// installed copy is moved aside. A failed swap restores that copy. A mod
+    /// that was enabled stays enabled under the new version's uid.
     async fn update_mod(
         &self,
         uid: String,

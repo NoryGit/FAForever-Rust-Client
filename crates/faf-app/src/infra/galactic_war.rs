@@ -293,6 +293,7 @@ impl GalacticWarGateway {
         &self,
         version: String,
         progress: mpsc::Sender<InstallProgress>,
+        cancel: tokio_util::sync::CancellationToken,
     ) -> Result<String, String> {
         if self.is_running() {
             return Err("close Galactic War before updating it".into());
@@ -302,8 +303,15 @@ impl GalacticWarGateway {
             return Err("refusing a download outside the configured FAF download server".into());
         }
 
-        let expected = self.expected_digest(&url).await;
-        let archive = self.download_archive(&url, &progress).await?;
+        let (expected, archive) = tokio::select! {
+            biased;
+            () = cancel.cancelled() => return Err("installation cancelled".into()),
+            result = async {
+                let expected = self.expected_digest(&url).await;
+                let archive = self.download_archive(&url, &progress).await?;
+                Ok::<_, String>((expected, archive))
+            } => result?,
+        };
         if let Some(expected) = expected {
             let actual = format!("{:x}", Sha256::digest(&archive));
             if actual != expected {
@@ -313,6 +321,7 @@ impl GalacticWarGateway {
 
         let _ = progress.send(InstallProgress::Extracting).await;
         let target = self.version_dir(&version);
+        let worker_cancel = cancel.clone();
         // Off the async runtime. Removing a directory tree and unpacking an
         // archive of up to 256 MiB are seconds of synchronous filesystem work,
         // and doing them on a Tokio worker parks that worker: the lobby's
@@ -321,12 +330,23 @@ impl GalacticWarGateway {
         tokio::task::spawn_blocking(move || {
             // A rerun after an interrupted install would otherwise refuse
             // forever.
-            let _ = std::fs::remove_dir_all(&target);
-            vault_install::install_flat_archive(
+            if worker_cancel.is_cancelled() {
+                return Err("installation cancelled".into());
+            }
+            if target.exists() {
+                if finish_install(&target).is_ok() {
+                    return Ok(());
+                }
+                std::fs::remove_dir_all(&target).map_err(|error| {
+                    format!("could not remove an incomplete installation: {error}")
+                })?;
+            }
+            vault_install::install_flat_archive_cancellable(
                 &archive,
                 &target,
                 "the Galactic War archive",
                 finish_install,
+                &worker_cancel,
             )
         })
         .await
@@ -441,6 +461,15 @@ impl GalacticWarPort for GalacticWarGateway {
     }
 
     async fn install(&self, version: String) -> mpsc::Receiver<InstallProgress> {
+        self.install_cancellable(version, tokio_util::sync::CancellationToken::new())
+            .await
+    }
+
+    async fn install_cancellable(
+        &self,
+        version: String,
+        cancel: tokio_util::sync::CancellationToken,
+    ) -> mpsc::Receiver<InstallProgress> {
         let (tx, rx) = mpsc::channel(32);
         // The run happens in a task so the receiver reaches the caller first.
         // Doing the work before returning `rx` deadlocks the moment the
@@ -454,7 +483,7 @@ impl GalacticWarPort for GalacticWarGateway {
             exited: self.exited.clone(),
         };
         tokio::spawn(async move {
-            let outcome = worker.install_version(version, tx.clone()).await;
+            let outcome = worker.install_version(version, tx.clone(), cancel).await;
             let _ = tx.send(InstallProgress::Finished(outcome)).await;
         });
         rx

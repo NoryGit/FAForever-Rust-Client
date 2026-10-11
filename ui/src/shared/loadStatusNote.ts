@@ -1,6 +1,6 @@
 /** Common presentation for list-like backend states. */
 export type LoadStatus =
-  | { type: "idle" | "ready" | "loading" }
+  | { type: "idle" | "ready" | "loading" | "cancelled" }
   | { type: "failed"; payload: { reason: string } };
 
 export function loadStatusNote(
@@ -11,6 +11,7 @@ export function loadStatusNote(
   switch (status.type) {
     case "idle":
     case "ready":
+    case "cancelled":
       return null;
     case "loading":
       return loadingLabel;

@@ -25,6 +25,7 @@ use faf_app::ports::{
     GameLaunchParams, GamePreparation, GameUpdaterPort, InstallPresence, MapSearchPage, MapsPort,
     ProcessPort, UpdateProgress,
 };
+use faf_app::ports::{GeneratorUpdate, MapGeneratorPort};
 use faf_app::{App, Ports};
 use faf_domain::protocol::vault_query::MapVaultQuery;
 use faf_domain::state::settings::GamePreferencesPatch;
@@ -130,6 +131,128 @@ struct Harness {
     app: App,
     scans: Arc<AtomicUsize>,
     requests: Arc<Mutex<Vec<GamePreparation>>>,
+}
+
+#[derive(Default)]
+struct HeldGenerator(Mutex<Option<mpsc::Sender<GeneratorUpdate>>>);
+
+#[async_trait]
+impl MapGeneratorPort for HeldGenerator {
+    async fn generate_named(&self, _map_name: String) -> mpsc::Receiver<GeneratorUpdate> {
+        let (tx, rx) = mpsc::channel(4);
+        tx.send(GeneratorUpdate::Status(
+            faf_domain::state::GeneratorStatus::Preparing,
+        ))
+        .await
+        .unwrap();
+        *self.0.lock().unwrap() = Some(tx);
+        rx
+    }
+    async fn generate(
+        &self,
+        _options: faf_domain::state::GeneratorOptions,
+    ) -> mpsc::Receiver<GeneratorUpdate> {
+        unreachable!()
+    }
+    async fn query_options(
+        &self,
+        _query: faf_domain::state::GeneratorOptionQuery,
+        _version: Option<String>,
+        _progress: Option<mpsc::Sender<GeneratorUpdate>>,
+    ) -> Result<Vec<String>, String> {
+        unreachable!()
+    }
+    async fn preflight(
+        &self,
+        _options: faf_domain::state::GeneratorOptions,
+    ) -> Result<String, String> {
+        unreachable!()
+    }
+    async fn help(&self, _version: Option<String>) -> Result<String, String> {
+        unreachable!()
+    }
+    fn cancel(&self) {
+        panic!("cancelling this join must close its receiver, not stop unrelated runs");
+    }
+    async fn save_preset(
+        &self,
+        _name: &str,
+        _options: &faf_domain::state::GeneratorOptions,
+    ) -> Result<(), String> {
+        unreachable!()
+    }
+    async fn list_presets(&self) -> Vec<faf_domain::state::GeneratorPreset> {
+        vec![]
+    }
+    async fn delete_preset(&self, _name: &str) -> Result<(), String> {
+        unreachable!()
+    }
+    async fn latest_version(&self) -> Result<String, String> {
+        unreachable!()
+    }
+    async fn available_versions(&self) -> Result<Vec<String>, String> {
+        unreachable!()
+    }
+    fn is_installed(&self, _map_name: &str) -> bool {
+        false
+    }
+    async fn clean_up(&self, _protected_maps: &[String]) -> Result<usize, String> {
+        unreachable!()
+    }
+    async fn map_previews(
+        &self,
+        _map_names: &[String],
+    ) -> std::collections::HashMap<String, String> {
+        Default::default()
+    }
+}
+
+#[tokio::test]
+async fn cancelling_join_closes_its_generator_and_does_not_start_the_updater() {
+    let generator = Arc::new(HeldGenerator::default());
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let (app, app_loop) = App::new(
+        "test",
+        Ports {
+            process: Arc::new(LaunchableProcess),
+            map_generator: generator.clone(),
+            updater: Arc::new(SilentUpdater {
+                requests: requests.clone(),
+            }),
+            ..fake_ports()
+        },
+    );
+    tokio::spawn(app_loop.run());
+    app.dispatch_and_wait(SettingsCommand::Load.into())
+        .await
+        .unwrap();
+    let app = Arc::new(app);
+    let work = {
+        let app = app.clone();
+        tokio::spawn(async move {
+            host(&app, GENERATED).await;
+        })
+    };
+    tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        while generator.0.lock().unwrap().is_none() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    app.dispatch_and_wait(LobbyCommand::CancelJoin.into())
+        .await
+        .unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(2), work)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(generator.0.lock().unwrap().as_ref().unwrap().is_closed());
+    assert!(requests.lock().unwrap().is_empty());
+    assert_eq!(
+        app.snapshot().map_generator.status,
+        faf_domain::state::GeneratorStatus::Cancelled
+    );
 }
 
 async fn harness() -> Harness {

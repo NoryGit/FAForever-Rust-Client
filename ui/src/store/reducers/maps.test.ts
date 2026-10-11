@@ -23,6 +23,7 @@ function state(overrides: Partial<MapsState> = {}): MapsState {
   return {
     vault: [],
     vaultStatus: { type: "idle" },
+    vaultProgress: null,
     browse: [],
     browseStatus: { type: "idle" },
     browseQuery: EMPTY_QUERY,

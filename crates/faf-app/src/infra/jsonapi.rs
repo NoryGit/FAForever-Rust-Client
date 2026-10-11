@@ -118,10 +118,22 @@ pub(crate) async fn fetch_all_pages(
     page_size: usize,
     build_url: impl Fn(u32) -> Result<url::Url, String>,
 ) -> Result<Vec<JsonApiDoc>, String> {
+    fetch_all_pages_with_progress(http, token, max_pages, page_size, |_, _| {}, build_url).await
+}
+
+pub(crate) async fn fetch_all_pages_with_progress(
+    http: &reqwest::Client,
+    token: &str,
+    max_pages: u32,
+    page_size: usize,
+    report: impl Fn(u32, Option<u32>),
+    build_url: impl Fn(u32) -> Result<url::Url, String>,
+) -> Result<Vec<JsonApiDoc>, String> {
     let first = fetch_document(http, build_url(1)?, token).await?;
     let short_first_page = first.data.len() < page_size;
     let reported = meta_page_i32(&first.meta, "totalPages").filter(|pages| *pages > 0);
     let mut docs = vec![first];
+    report(1, reported.map(|pages| pages as u32));
 
     let last = match reported {
         Some(pages) => u32::try_from(pages).unwrap_or(1).min(max_pages),
@@ -134,6 +146,7 @@ pub(crate) async fn fetch_all_pages(
                 let doc = fetch_document(http, build_url(page)?, token).await?;
                 let short = doc.data.len() < page_size;
                 docs.push(doc);
+                report(page, None);
                 if short {
                     break;
                 }
@@ -143,16 +156,15 @@ pub(crate) async fn fetch_all_pages(
     };
 
     if last > 1 {
-        let rest: Vec<Result<JsonApiDoc, String>> = futures_util::stream::iter(2..=last)
+        let mut rest = futures_util::stream::iter(2..=last)
             .map(|page| {
                 let url = build_url(page);
                 async move { fetch_document(http, url?, token).await }
             })
-            .buffered(PAGE_FETCH_CONCURRENCY)
-            .collect()
-            .await;
-        for doc in rest {
+            .buffered(PAGE_FETCH_CONCURRENCY);
+        while let Some(doc) = rest.next().await {
             docs.push(doc?);
+            report(docs.len() as u32, reported.map(|pages| pages as u32));
         }
     }
     Ok(docs)

@@ -237,6 +237,11 @@ function TutorialDetail({ tutorial, categoryName }: { tutorial: Tutorial; catego
                 </>
               )}
             </Button>
+            {preparing !== null && (
+              <Button onClick={() => ipc.send({ kind: "Tutorials", command: { type: "cancelLaunch" } })}>
+                {t("common.cancel")}
+              </Button>
+            )}
             <span className="muted tutorial-launch-note">{t("tutorials.autoPrepared")}</span>
           </div>
         </div>

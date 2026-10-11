@@ -15,6 +15,7 @@ use faf_app::ports::{MapSearchPage, MapsPort};
 use faf_app::{App, Ports};
 use faf_domain::protocol::vault_query::MapVaultQuery;
 use faf_domain::state::{InstalledMap, MapListStatus, MapsCommand, MatchmakerMapPool, VaultMap};
+use tokio::sync::mpsc;
 
 /// Counts crawls. `list_vault` is the only method under test.
 #[derive(Default)]
@@ -25,6 +26,20 @@ struct CountingMaps {
 
 #[async_trait]
 impl MapsPort for CountingMaps {
+    async fn list_vault_with_progress(
+        &self,
+        progress: Option<mpsc::Sender<faf_domain::state::maps::CatalogueProgress>>,
+    ) -> Result<Vec<VaultMap>, String> {
+        if let Some(progress) = progress {
+            let _ = progress
+                .send(faf_domain::state::maps::CatalogueProgress {
+                    pages: 2,
+                    total_pages: Some(5),
+                })
+                .await;
+        }
+        self.list_vault().await
+    }
     async fn list_vault(&self) -> Result<Vec<VaultMap>, String> {
         self.crawls.fetch_add(1, Ordering::SeqCst);
         // Long enough for callers asking together to overlap, as views
@@ -66,6 +81,43 @@ impl MapsPort for CountingMaps {
     async fn set_map_version_hidden(&self, _version_id: i32, _hidden: bool) -> Result<(), String> {
         unreachable!("this test only drives the catalogue crawl")
     }
+}
+
+#[tokio::test]
+async fn cancelling_a_catalogue_drops_the_read_and_allows_a_retry() {
+    let (app, crawls) = app_with(false);
+    let app = Arc::new(app);
+    let load = {
+        let app = app.clone();
+        tokio::spawn(async move {
+            app.dispatch_and_wait(MapsCommand::LoadVault.into())
+                .await
+                .unwrap();
+        })
+    };
+    tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        while app.snapshot().maps.vault_progress.is_none() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(app.snapshot().maps.vault_progress.unwrap().pages, 2);
+    app.dispatch_and_wait(MapsCommand::CancelVaultLoad.into())
+        .await
+        .unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(2), load)
+        .await
+        .unwrap()
+        .unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(70)).await;
+    assert_eq!(app.snapshot().maps.vault_status, MapListStatus::Cancelled);
+    assert!(app.snapshot().maps.vault_progress.is_none());
+    app.dispatch_and_wait(MapsCommand::LoadVault.into())
+        .await
+        .unwrap();
+    assert_eq!(app.snapshot().maps.vault_status, MapListStatus::Ready);
+    assert_eq!(crawls.load(Ordering::SeqCst), 2);
 }
 
 fn app_with(fail: bool) -> (App, Arc<AtomicUsize>) {

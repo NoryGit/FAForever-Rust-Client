@@ -253,6 +253,7 @@ pub enum GalacticWarEvent {
     rename_all_fields = "camelCase"
 )]
 pub enum GalacticWarCommand {
+    CancelInstall,
     /// Re-read what is installed, what the gateway advertises, and the season
     /// statistics. Cheap enough to run on entering the tab.
     Refresh,

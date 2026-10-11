@@ -54,12 +54,13 @@ use serde_json::Value;
 
 use crate::infra::env_or;
 use crate::infra::jsonapi::{
-    fetch_all_pages, fetch_document, find_rel_resource, meta_page_i32, rel_target, resource_index,
-    total_pages, value_bool, value_f64, value_i32, JsonApiDoc, JsonApiResource,
+    fetch_all_pages_with_progress, fetch_document, find_rel_resource, meta_page_i32, rel_target,
+    resource_index, total_pages, value_bool, value_f64, value_i32, JsonApiDoc, JsonApiResource,
 };
 use crate::infra::review_totals::{self, ReviewTotal, Subject};
 use crate::infra::vault_install::{
-    archive_root_name, bounded_body, install_archive, validate_url, MAX_DOWNLOAD_BYTES,
+    archive_root_name, bounded_body, install_archive, replace_archive, validate_url,
+    MAX_DOWNLOAD_BYTES,
 };
 use crate::ports::{ModPrepFailure, ModSearchPage, ModsPort};
 
@@ -274,6 +275,13 @@ fn content_range_total(header: &str) -> Option<u64> {
 #[async_trait]
 impl ModsPort for ModsClient {
     async fn list_vault(&self) -> Result<Vec<VaultMod>, String> {
+        self.list_vault_with_progress(None).await
+    }
+
+    async fn list_vault_with_progress(
+        &self,
+        progress: Option<tokio::sync::mpsc::Sender<faf_domain::state::maps::CatalogueProgress>>,
+    ) -> Result<Vec<VaultMod>, String> {
         let token = self
             .tokens
             .get()
@@ -283,11 +291,19 @@ impl ModsPort for ModsClient {
         // minus its lookup-index duty: a mod search is useless if most of the
         // vault is missing and there is no paging UI yet.
         let api_base = self.config.api_base.clone();
-        let docs = fetch_all_pages(
+        let docs = fetch_all_pages_with_progress(
             &self.http,
             &token,
             MAX_VAULT_PAGES,
             VAULT_PAGE_SIZE,
+            |pages, total_pages| {
+                if let Some(progress) = &progress {
+                    let _ = progress.try_send(faf_domain::state::maps::CatalogueProgress {
+                        pages,
+                        total_pages,
+                    });
+                }
+            },
             |page| {
                 let mut url = url::Url::parse(&format!("{api_base}/data/mod"))
                     .map_err(|e| format!("invalid API base: {e}"))?;
@@ -402,19 +418,26 @@ impl ModsPort for ModsClient {
         // Whether the version being replaced was switched on, read before the
         // uninstall scrubs its uid out of `game.prefs`. A new version is a new
         // uid, so the flag cannot simply be left in place.
-        let was_enabled = list_installed_dir(&mods_dir())
+        let previous = list_installed_dir(&mods_dir())
             .await?
             .into_iter()
-            .find(|installed| installed.folder_name.eq_ignore_ascii_case(&folder_name))
-            .is_some_and(|installed| installed.enabled);
+            .find(|installed| installed.folder_name.eq_ignore_ascii_case(&folder_name));
+        let destination = mods_dir();
+        let old = safe_mod_target(&destination, &folder_name)?;
+        let expected_uid = uid.clone();
+        tokio::task::spawn_blocking(move || {
+            replace_archive(&bytes, &destination, &old, |staged| {
+                validate_mod_uid(staged, &expected_uid)
+            })
+        })
+        .await
+        .map_err(|error| format!("replacement task failed: {error}"))??;
 
-        self.uninstall_mod(folder_name).await?;
-        self.extract_mod_archive(&uid, bytes).await?;
-
-        if was_enabled {
+        if let Some(previous) = previous {
             let mut active = read_active_mod_uids().await;
-            if !active.contains(&uid) {
-                active.push(uid);
+            active.retain(|candidate| candidate != &previous.uid);
+            if previous.enabled && !active.contains(&uid) {
+                active.push(uid.clone());
             }
             write_active_mod_uids_to_disk(&active).await?;
         }
@@ -533,13 +556,29 @@ impl ModsPort for ModsClient {
                     });
                     continue;
                 }
-                // Approved. Goes through `uninstall_mod` rather than a bare
-                // delete so the replaced version's uid also leaves
-                // `game.prefs`: an active mod whose folder is gone is exactly
-                // the state that produces an unexplained launch failure later.
-                self.uninstall_mod(root)
-                    .await
-                    .map_err(ModPrepFailure::Failed)?;
+                let destination = dest.clone();
+                let expected_uid = uid.clone();
+                tokio::task::spawn_blocking(move || {
+                    replace_archive(&bytes, &destination, &target, |staged| {
+                        validate_mod_uid(staged, &expected_uid)
+                    })
+                })
+                .await
+                .map_err(|error| {
+                    ModPrepFailure::Failed(format!("replacement task failed: {error}"))
+                })?
+                .map_err(ModPrepFailure::Failed)?;
+                if let Some(occupant) = occupant {
+                    let mut active = read_active_mod_uids().await;
+                    active.retain(|candidate| candidate != &occupant.uid);
+                    if !active.contains(uid) {
+                        active.push(uid.clone());
+                    }
+                    write_active_mod_uids_to_disk(&active)
+                        .await
+                        .map_err(ModPrepFailure::Failed)?;
+                }
+                continue;
             }
             self.extract_mod_archive(uid, bytes)
                 .await
@@ -560,6 +599,17 @@ impl ModsPort for ModsClient {
             .await
             .map_err(ModPrepFailure::Failed)
     }
+}
+
+fn validate_mod_uid(staged: &Path, expected: &str) -> Result<(), String> {
+    let contents = std::fs::read_to_string(staged.join("mod_info.lua"))
+        .map_err(|error| format!("could not read staged mod metadata: {error}"))?;
+    let info = parse_mod_info(&contents)
+        .ok_or_else(|| "downloaded mod has no valid mod_info.lua".to_string())?;
+    if info.uid != expected {
+        return Err("downloaded mod uid does not match the requested version".into());
+    }
+    Ok(())
 }
 
 pub(crate) fn safe_mod_target(root: &Path, folder_name: &str) -> Result<PathBuf, String> {
@@ -594,6 +644,11 @@ pub(crate) async fn list_installed_dir(dir: &Path) -> Result<Vec<InstalledMod>, 
         .map_err(|e| format!("could not list {}: {e}", dir.display()))?
     {
         let path = entry.path();
+        if crate::infra::vault_install::is_install_staging_name(
+            &entry.file_name().to_string_lossy(),
+        ) {
+            continue;
+        }
         if !is_directory(&path).await {
             continue;
         }
@@ -1787,6 +1842,13 @@ ui_only = true
         let bad = dir.join("not_a_mod");
         tokio::fs::create_dir_all(&bad).await.unwrap();
         // No mod_info.lua at all: should be skipped.
+
+        // A retained replacement backup must not appear as another installed mod.
+        let staged = dir.join(".faf-install-0123456789abcdef/previous");
+        tokio::fs::create_dir_all(&staged).await.unwrap();
+        tokio::fs::write(staged.join("mod_info.lua"), SAMPLE_MOD_INFO)
+            .await
+            .unwrap();
 
         let installed = list_installed_dir(&dir).await.expect("should list");
         assert_eq!(installed.len(), 1);

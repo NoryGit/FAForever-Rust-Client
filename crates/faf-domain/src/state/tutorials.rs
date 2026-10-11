@@ -139,6 +139,7 @@ pub fn tutorials_of(tutorials: &[Tutorial], category_id: i32) -> Vec<&Tutorial> 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
 #[serde(tag = "type", content = "payload", rename_all = "camelCase")]
 pub enum TutorialsEvent {
+    LaunchCancelled,
     Loading,
     Loaded {
         categories: Vec<TutorialCategory>,
@@ -170,6 +171,7 @@ pub enum TutorialsEvent {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
 #[serde(tag = "type", content = "payload", rename_all = "camelCase")]
 pub enum TutorialsCommand {
+    CancelLaunch,
     Load,
     #[serde(rename_all = "camelCase")]
     Select {
@@ -183,6 +185,7 @@ pub enum TutorialsCommand {
 
 pub fn reduce(state: &mut TutorialsState, event: &TutorialsEvent) {
     match event {
+        TutorialsEvent::LaunchCancelled => state.launch = TutorialLaunchStatus::Idle,
         TutorialsEvent::Loading => state.status = TutorialsStatus::Loading,
         TutorialsEvent::Loaded {
             categories,

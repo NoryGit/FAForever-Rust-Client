@@ -14,10 +14,16 @@ use faf_domain::state::{
 };
 
 use crate::ports::InstallProgress;
-use crate::runtime::{EventSink, ServiceCtx};
+use crate::runtime::{CancellationSlot, EventSink, ServiceCtx};
+
+#[derive(Default)]
+pub struct GalacticWarContext {
+    install: CancellationSlot,
+}
 
 pub async fn handle(cmd: GalacticWarCommand, ctx: &ServiceCtx, out: &EventSink) {
     match cmd {
+        GalacticWarCommand::CancelInstall => ctx.galactic_war.install.cancel(),
         GalacticWarCommand::Refresh => refresh(ctx, out).await,
         GalacticWarCommand::RefreshStatistics => refresh_statistics(ctx, out).await,
         GalacticWarCommand::Install => {
@@ -109,6 +115,7 @@ async fn install(ctx: &ServiceCtx, out: &EventSink) -> bool {
         // nothing usable. `refresh` has already reported why.
         return false;
     };
+    let cancel = ctx.galactic_war.install.begin();
 
     out.emit(GalacticWarEvent::StatusChanged {
         status: GalacticWarStatus::Downloading {
@@ -118,12 +125,19 @@ async fn install(ctx: &ServiceCtx, out: &EventSink) -> bool {
         },
     });
 
-    let mut progress = ctx.ports.galactic_war.install(version.clone()).await;
+    let mut progress = ctx
+        .ports
+        .galactic_war
+        .install_cancellable(version.clone(), cancel.clone())
+        .await;
     // The port always ends with `Finished`. Treating a stream that closes
     // without one as a failure keeps a panicked task from leaving the UI on a
     // progress bar that will never move again.
     let mut settled = None;
     while let Some(step) = progress.recv().await {
+        if cancel.is_cancelled() && !matches!(step, InstallProgress::Finished(_)) {
+            continue;
+        }
         match step {
             InstallProgress::Downloading {
                 received_bytes,
@@ -153,18 +167,26 @@ async fn install(ctx: &ServiceCtx, out: &EventSink) -> bool {
             out.emit(GalacticWarEvent::StatusChanged {
                 status: GalacticWarStatus::Idle,
             });
-            true
+            !cancel.is_cancelled()
         }
         Some(Err(reason)) => {
             out.emit(GalacticWarEvent::StatusChanged {
-                status: GalacticWarStatus::Failed { reason },
+                status: if cancel.is_cancelled() {
+                    GalacticWarStatus::Idle
+                } else {
+                    GalacticWarStatus::Failed { reason }
+                },
             });
             false
         }
         None => {
             out.emit(GalacticWarEvent::StatusChanged {
-                status: GalacticWarStatus::Failed {
-                    reason: "the installation stopped without finishing".into(),
+                status: if cancel.is_cancelled() {
+                    GalacticWarStatus::Idle
+                } else {
+                    GalacticWarStatus::Failed {
+                        reason: "the installation stopped without finishing".into(),
+                    }
                 },
             });
             false
@@ -186,6 +208,9 @@ async fn play(ctx: &ServiceCtx, out: &EventSink) {
     let needs_install =
         !state.is_installed() || state.update_available() || state.recheck_minimum();
     if needs_install && !install(ctx, out).await {
+        return;
+    }
+    if needs_install && ctx.galactic_war.install.is_cancelled() {
         return;
     }
 

@@ -113,6 +113,7 @@ impl CancelSignal {
         self.changed.notify_waiters();
     }
 
+    #[cfg(test)]
     fn clear(&self) {
         self.raised
             .store(false, std::sync::atomic::Ordering::SeqCst);
@@ -144,6 +145,30 @@ enum RunOutcome {
     /// The user asked to stop. Not an error, and reported as its own status.
     Cancelled,
     Failed(String),
+}
+
+struct AbortTaskOnDrop<T>(tokio::task::JoinHandle<T>);
+impl<T> Drop for AbortTaskOnDrop<T> {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
+async fn next_output_line<R: tokio::io::AsyncRead + Unpin>(
+    lines: &mut tokio::io::Split<BufReader<R>>,
+) -> std::io::Result<Option<String>> {
+    Ok(lines.next_segment().await?.map(|bytes| {
+        String::from_utf8_lossy(&bytes)
+            .trim_end_matches('\r')
+            .to_string()
+    }))
+}
+
+async fn cancelled(signal: Option<&CancelSignal>) {
+    match signal {
+        Some(signal) => signal.raised().await,
+        None => std::future::pending().await,
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -275,6 +300,8 @@ pub struct NeroxisMapGenerator {
     /// JVM, which is why it is behind an `Arc`: the run happens on a spawned
     /// task that outlives the call which started it.
     cancel: Arc<CancelSignal>,
+    active_runs: Arc<std::sync::Mutex<Vec<std::sync::Weak<CancelSignal>>>>,
+    generation: Arc<tokio::sync::Mutex<()>>,
     /// Serialises JAR installs.
     ///
     /// Every command is dispatched on its own task, so two of them can want
@@ -305,6 +332,8 @@ impl NeroxisMapGenerator {
             // decision not to sign them rests on the connection staying HTTPS.
             http: super::http::https_only_download_client(),
             cancel: Arc::new(CancelSignal::default()),
+            active_runs: Arc::new(std::sync::Mutex::new(Vec::new())),
+            generation: Arc::new(tokio::sync::Mutex::new(())),
             installing: Arc::new(tokio::sync::Mutex::new(())),
             releases: Arc::new(tokio::sync::Mutex::new(None)),
             show_window: Arc::new(AtomicBool::new(false)),
@@ -330,6 +359,8 @@ impl NeroxisMapGenerator {
             config: self.config.clone(),
             http: self.http.clone(),
             cancel: Arc::clone(&self.cancel),
+            active_runs: Arc::clone(&self.active_runs),
+            generation: Arc::clone(&self.generation),
             installing: Arc::clone(&self.installing),
             releases: Arc::clone(&self.releases),
             show_window: Arc::clone(&self.show_window),
@@ -385,11 +416,24 @@ impl NeroxisMapGenerator {
         version: GeneratorVersion,
         progress: &mpsc::Sender<GeneratorUpdate>,
     ) -> Result<PathBuf, String> {
+        self.ensure_jar_inner(version, progress, None).await
+    }
+
+    async fn ensure_jar_inner(
+        &self,
+        version: GeneratorVersion,
+        progress: &mpsc::Sender<GeneratorUpdate>,
+        cancel: Option<&CancelSignal>,
+    ) -> Result<PathBuf, String> {
         let target = self.jar_path(version);
         if target.is_file() {
             return Ok(target);
         }
-        let _installing = self.installing.lock().await;
+        let _installing = tokio::select! {
+            biased;
+            () = cancelled(cancel) => return Err("map generation cancelled".into()),
+            lease = self.installing.lock() => lease,
+        };
         // Whoever held the lock may have been fetching exactly this release.
         if target.is_file() {
             return Ok(target);
@@ -412,7 +456,12 @@ impl NeroxisMapGenerator {
             total_bytes: None,
         }));
 
-        let response = self.http.get(&url).send().await.map_err(|e| {
+        let response = tokio::select! {
+            biased;
+            () = cancelled(cancel) => return Err("map generation cancelled".into()),
+            response = self.http.get(&url).send() => response,
+        }
+        .map_err(|e| {
             format!(
                 "could not reach the map generator download: {}",
                 crate::infra::http::describe_transport_error(&e)
@@ -452,7 +501,7 @@ impl NeroxisMapGenerator {
         let mut stream = response.bytes_stream();
         use futures_util::StreamExt as _;
         use tokio::io::AsyncWriteExt as _;
-        let write_result: Result<(), String> = async {
+        let write = async {
             while let Some(chunk) = stream.next().await {
                 let chunk = chunk.map_err(|e| {
                     format!(
@@ -478,10 +527,20 @@ impl NeroxisMapGenerator {
             file.flush()
                 .await
                 .map_err(|e| format!("could not finish writing the generator: {e}"))
-        }
-        .await;
+        };
+        let write_result: Result<(), String> = tokio::select! {
+            biased;
+            () = cancelled(cancel) => Err("map generation cancelled".into()),
+            result = write => result,
+        };
         drop(file);
-        if let Err(error) = write_result {
+        if let Err(error) = write_result.and_then(|()| {
+            if cancel.is_some_and(|signal| signal.is_raised()) {
+                Err("map generation cancelled".into())
+            } else {
+                Ok(())
+            }
+        }) {
             let _ = tokio::fs::remove_file(&temp).await;
             return Err(error);
         }
@@ -552,7 +611,8 @@ impl NeroxisMapGenerator {
             // The generator writes into its working directory.
             .current_dir(self.config.maps_dir())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
+            .stderr(Stdio::piped())
+            .kill_on_drop(true);
         // Always hidden: what the switch opens is the log window above, which
         // is the only one that can show anything.
         crate::infra::hide_console(&mut command);
@@ -571,21 +631,21 @@ impl NeroxisMapGenerator {
         };
 
         let mut names: Vec<String> = Vec::new();
-        let mut lines = BufReader::new(stdout).lines();
+        let mut lines = BufReader::new(stdout).split(b'\n');
 
         // Drain stderr concurrently. The generator prints usage help there on a
         // bad option combination, and a full pipe would deadlock the child.
-        let stderr_task = tokio::spawn(async move {
+        let mut stderr_task = AbortTaskOnDrop(tokio::spawn(async move {
             let mut collected = String::new();
-            let mut lines = BufReader::new(stderr).lines();
-            while let Ok(Some(line)) = lines.next_line().await {
+            let mut lines = BufReader::new(stderr).split(b'\n');
+            while let Ok(Some(line)) = next_output_line(&mut lines).await {
                 if collected.len() < 8000 {
                     collected.push_str(&line);
                     collected.push('\n');
                 }
             }
             collected
-        });
+        }));
 
         // A `--visualize` run opens a viewer window and stays alive on purpose,
         // so it is exempt from the timeout: the Java client's `GenerateMapTask`
@@ -606,8 +666,8 @@ impl NeroxisMapGenerator {
             }
             let read_line = async {
                 match wait_for {
-                    Some(limit) => tokio::time::timeout(limit, lines.next_line()).await,
-                    None => Ok(lines.next_line().await),
+                    Some(limit) => tokio::time::timeout(limit, next_output_line(&mut lines)).await,
+                    None => Ok(next_output_line(&mut lines).await),
                 }
             };
             // A generation run is the one long operation in this client that a
@@ -656,26 +716,32 @@ impl NeroxisMapGenerator {
         // Stdout closing is not the same as exiting: a generator that closes
         // its pipes but never terminates would hang here forever without the
         // same deadline the read loop uses.
-        let status = match remaining() {
-            Some(limit) => match tokio::time::timeout(limit, child.wait()).await {
-                Ok(Ok(status)) => status,
-                Ok(Err(e)) => {
-                    return RunOutcome::Failed(format!("map generator did not exit cleanly: {e}"))
+        let waited = tokio::select! {
+            () = self.cancel.raised() => {
+                let _ = child.start_kill();
+                let _ = tokio::time::timeout(Duration::from_secs(5), child.wait()).await;
+                return RunOutcome::Cancelled;
+            }
+            status = async {
+                match remaining() {
+                    Some(limit) => tokio::time::timeout(limit, child.wait()).await.ok(),
+                    None => Some(child.wait().await),
                 }
-                Err(_) => {
-                    return RunOutcome::Failed(
-                        self.abandon(&mut child, untimed, limit_seconds).await,
-                    )
-                }
-            },
-            None => match child.wait().await {
-                Ok(status) => status,
-                Err(e) => {
-                    return RunOutcome::Failed(format!("map generator did not exit cleanly: {e}"))
-                }
-            },
+            } => status,
         };
-        let errors = stderr_task.await.unwrap_or_default();
+        let status = match waited {
+            Some(Ok(status)) => status,
+            Some(Err(error)) => {
+                return RunOutcome::Failed(format!("map generator did not exit cleanly: {error}"))
+            }
+            None => {
+                return RunOutcome::Failed(self.abandon(&mut child, untimed, limit_seconds).await)
+            }
+        };
+        let errors = tokio::select! {
+            () = self.cancel.raised() => return RunOutcome::Cancelled,
+            errors = &mut stderr_task.0 => errors.unwrap_or_default(),
+        };
         for line in errors.lines() {
             self.log_line(line).await;
         }
@@ -993,12 +1059,81 @@ impl NeroxisMapGenerator {
         options: GeneratorOptions,
         tx: mpsc::Sender<GeneratorUpdate>,
     ) {
-        let status = match self.run_inner(map_name, options, &tx).await {
+        let closed = tx.clone();
+        let cancel = self.cancel.clone();
+        let watcher = tokio::spawn(async move {
+            closed.closed().await;
+            cancel.raise();
+        });
+        let result = self.run_staged(map_name, options, &tx).await;
+        watcher.abort();
+        let status = match result {
             RunOutcome::Generated(maps) => GeneratorStatus::Generated { maps },
             RunOutcome::Cancelled => GeneratorStatus::Cancelled,
             RunOutcome::Failed(reason) => GeneratorStatus::Failed { reason },
         };
         let _ = tx.send(GeneratorUpdate::Status(status)).await;
+    }
+
+    async fn run_staged(
+        &self,
+        map_name: Option<String>,
+        mut options: GeneratorOptions,
+        tx: &mpsc::Sender<GeneratorUpdate>,
+    ) -> RunOutcome {
+        let _lease = tokio::select! {
+            () = self.cancel.raised() => return RunOutcome::Cancelled,
+            lease = self.generation.lock() => lease,
+        };
+        let destination = if map_name.is_none() && !options.output_path.is_empty() {
+            let selected = PathBuf::from(&options.output_path);
+            if selected.is_absolute() {
+                selected
+            } else {
+                self.config.maps_dir().join(selected)
+            }
+        } else {
+            self.config.maps_dir()
+        };
+        let staging = destination.join(format!(".faf-install-{:016x}", rand::random::<u64>()));
+        if let Err(error) = tokio::fs::create_dir_all(&staging).await {
+            return RunOutcome::Failed(format!("could not stage generated maps: {error}"));
+        }
+        let mut worker = self.for_run();
+        worker.config.maps_dir = Some(staging.clone());
+        // The chosen output directory is the commit destination. The JVM
+        // writes only into staging, relative to its private working directory.
+        options.output_path = ".".into();
+        let mut result = worker.run_inner(map_name, options, tx).await;
+        if self.is_cancelled() {
+            result = RunOutcome::Cancelled;
+        } else if let RunOutcome::Generated(maps) = &result {
+            let mut failure = None;
+            for name in maps {
+                let target = destination.join(name);
+                if target.exists() {
+                    continue;
+                }
+                if let Err(error) = tokio::fs::rename(staging.join(name), target).await {
+                    failure = Some(format!("could not install a generated map: {error}"));
+                    break;
+                }
+            }
+            if let Some(reason) = failure {
+                result = RunOutcome::Failed(reason);
+            }
+        }
+        let _ = tokio::fs::remove_dir_all(staging).await;
+        result
+    }
+
+    fn generation_worker(&self) -> Self {
+        let mut worker = self.for_run();
+        worker.cancel = Arc::new(CancelSignal::default());
+        let mut active = self.active_runs.lock().unwrap();
+        active.retain(|signal| signal.strong_count() > 0);
+        active.push(Arc::downgrade(&worker.cancel));
+        worker
     }
 
     async fn run_inner(
@@ -1025,12 +1160,20 @@ impl NeroxisMapGenerator {
             },
             None => {
                 if let Some(explicit) = &options.version {
-                    fail!(self.resolve_version(Some(explicit)).await)
+                    fail!(tokio::select! {
+                        biased;
+                        () = self.cancel.raised() => return RunOutcome::Cancelled,
+                        result = self.resolve_version(Some(explicit)) => result,
+                    })
                 } else {
                     let _ = tx
                         .send(GeneratorUpdate::Status(GeneratorStatus::ResolvingVersion))
                         .await;
-                    fail!(self.resolve_latest().await)
+                    fail!(tokio::select! {
+                        biased;
+                        () = self.cancel.raised() => return RunOutcome::Cancelled,
+                        result = self.resolve_latest() => result,
+                    })
                 }
             }
         };
@@ -1066,7 +1209,7 @@ impl NeroxisMapGenerator {
                 fallback_seed(),
             )));
         }
-        let jar = fail!(self.ensure_jar(version, tx).await);
+        let jar = fail!(self.ensure_jar_inner(version, tx, Some(&self.cancel)).await);
         // A cancellation arriving during the download should stop us here
         // rather than starting a JVM nobody is waiting for.
         if self.is_cancelled() {
@@ -1085,8 +1228,8 @@ impl NeroxisMapGenerator {
                 RunOutcome::Generated(names) => maps.extend(names),
                 RunOutcome::Cancelled => return RunOutcome::Cancelled,
                 RunOutcome::Failed(reason) if maps.is_empty() => return RunOutcome::Failed(reason),
-                // The maps already written are real and on disk: say how far
-                // the batch got rather than presenting them as lost.
+                // Report how far the batch got. Staging is discarded when
+                // the batch fails, so no incomplete batch is installed.
                 RunOutcome::Failed(reason) => {
                     return RunOutcome::Failed(format!(
                         "{reason} (after {} of {} maps were generated)",
@@ -1347,8 +1490,7 @@ impl MapGeneratorPort for NeroxisMapGenerator {
     async fn generate_named(&self, map_name: String) -> mpsc::Receiver<GeneratorUpdate> {
         let (tx, rx) = mpsc::channel(32);
         // A stale cancellation must not stop the run that follows it.
-        self.cancel.clear();
-        let runner = self.for_run();
+        let runner = self.generation_worker();
         tokio::spawn(async move {
             runner
                 .run(Some(map_name), GeneratorOptions::default(), tx)
@@ -1359,8 +1501,7 @@ impl MapGeneratorPort for NeroxisMapGenerator {
 
     async fn generate(&self, options: GeneratorOptions) -> mpsc::Receiver<GeneratorUpdate> {
         let (tx, rx) = mpsc::channel(32);
-        self.cancel.clear();
-        let runner = self.for_run();
+        let runner = self.generation_worker();
         tokio::spawn(async move {
             runner.run(None, options, tx).await;
         });
@@ -1432,6 +1573,15 @@ impl MapGeneratorPort for NeroxisMapGenerator {
 
     fn cancel(&self) {
         self.cancel.raise();
+        for signal in self
+            .active_runs
+            .lock()
+            .unwrap()
+            .iter()
+            .filter_map(|run| run.upgrade())
+        {
+            signal.raise();
+        }
     }
 
     async fn save_preset(&self, name: &str, options: &GeneratorOptions) -> Result<(), String> {
@@ -1647,6 +1797,98 @@ impl MapGeneratorPort for FakeMapGenerator {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn non_utf8_console_output_does_not_hide_the_next_map_name() {
+        let data = b"caf\xe9\r\nneroxis_map_generator_1.21.0_ualhhyfgnqw4u_cagaeaakbyaaaqd2\n";
+        let mut lines = BufReader::new(&data[..]).split(b'\n');
+        assert_eq!(
+            next_output_line(&mut lines).await.unwrap().unwrap(),
+            "caf\u{fffd}"
+        );
+        let name = next_output_line(&mut lines).await.unwrap().unwrap();
+        assert!(!map_generator::scrape_map_names(&name).is_empty());
+        assert!(next_output_line(&mut lines).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn dropping_generation_receiver_cancels_only_that_run() {
+        let root = temp_dir("receiver-cancel");
+        let generator = NeroxisMapGenerator::new(config(&root));
+        let first = generator.generation_worker();
+        let second = generator.generation_worker();
+        let lock = generator.generation.lock().await;
+        let (tx, rx) = mpsc::channel(4);
+        let worker = tokio::spawn(async move {
+            first.run(None, GeneratorOptions::default(), tx).await;
+            assert!(first.is_cancelled());
+        });
+        drop(rx);
+        tokio::time::timeout(Duration::from_secs(2), worker)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(!second.is_cancelled());
+        drop(lock);
+        assert!(!root.join("maps").exists());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn cancelling_a_generator_download_removes_its_partial_jar() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let root = tempfile::tempdir().unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut request = [0; 2048];
+            let _ = stream.read(&mut request).await.unwrap();
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 100000\r\n\r\npartial jar")
+                .await
+                .unwrap();
+            stream.flush().await.unwrap();
+            std::future::pending::<()>().await;
+        });
+        let mut configuration = config(root.path());
+        configuration.download_url_format = format!("http://{address}/{{version}}.jar");
+        let mut generator = NeroxisMapGenerator::new(configuration).generation_worker();
+        generator.http = reqwest::Client::new();
+        let version = GeneratorVersion::parse("1.21.0").unwrap();
+        let target = generator.jar_path(version);
+        let partial = target.with_extension("partial");
+        let signal = generator.cancel.clone();
+        let (tx, _rx) = mpsc::channel(32);
+        let task = tokio::spawn(async move {
+            generator
+                .ensure_jar_inner(version, &tx, Some(&generator.cancel))
+                .await
+        });
+        tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                if tokio::fs::metadata(&partial)
+                    .await
+                    .is_ok_and(|metadata| metadata.len() > 0)
+                {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        signal.raise();
+        assert!(tokio::time::timeout(Duration::from_secs(2), task)
+            .await
+            .unwrap()
+            .unwrap()
+            .is_err());
+        assert!(!partial.exists());
+        assert!(!target.exists());
+        server.abort();
+        let _ = server.await;
+    }
 
     fn config(dir: &Path) -> MapGeneratorConfig {
         MapGeneratorConfig {

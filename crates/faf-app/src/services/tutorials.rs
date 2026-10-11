@@ -13,10 +13,16 @@
 use faf_domain::state::{JoinState, TutorialsCommand, TutorialsEvent, TUTORIALS_FEATURED_MOD};
 
 use crate::ports::{GamePreparation, UpdateProgress};
-use crate::runtime::{EventSink, ServiceCtx};
+use crate::runtime::{CancellationSlot, EventSink, ServiceCtx};
+
+#[derive(Default)]
+pub struct TutorialsContext {
+    launch: CancellationSlot,
+}
 
 pub async fn handle(cmd: TutorialsCommand, ctx: &ServiceCtx, out: &EventSink) {
     match cmd {
+        TutorialsCommand::CancelLaunch => ctx.tutorials.launch.cancel(),
         TutorialsCommand::Load => {
             out.emit(TutorialsEvent::Loading);
             match ctx.ports.tutorials.list_tutorials().await {
@@ -36,6 +42,7 @@ pub async fn handle(cmd: TutorialsCommand, ctx: &ServiceCtx, out: &EventSink) {
 
 async fn launch(tutorial_id: i32, ctx: &ServiceCtx, out: &EventSink) {
     crate::runtime::expect_admitted(crate::runtime::Key::TutorialLaunch);
+    let cancel = ctx.tutorials.launch.begin();
     let Some(tutorial) = out.with_state(|state| {
         state
             .tutorials
@@ -76,18 +83,36 @@ async fn launch(tutorial_id: i32, ctx: &ServiceCtx, out: &EventSink) {
 
     // Same preparation a live game gets: patch the featured mod, fetch the
     // map: narrated because it is slow the first time.
+    out.emit(TutorialsEvent::LaunchPreparing {
+        tutorial_id,
+        detail: "Preparing tutorial".into(),
+    });
     let mut updates = ctx
         .ports
         .updater
-        .prepare(GamePreparation {
-            featured_mod: TUTORIALS_FEATURED_MOD.to_string(),
-            map_folder: Some(tutorial.map_folder_name.clone()),
-            cache_rolling_branches: false,
-        })
+        .prepare_cancellable(
+            GamePreparation {
+                featured_mod: TUTORIALS_FEATURED_MOD.to_string(),
+                map_folder: Some(tutorial.map_folder_name.clone()),
+                cache_rolling_branches: false,
+            },
+            cancel.clone(),
+        )
         .await;
 
     let mut outcome = Err("the game updater stopped without finishing".to_string());
-    while let Some(update) = updates.recv().await {
+    loop {
+        let update = tokio::select! {
+            biased;
+            () = cancel.cancelled() => {
+                out.emit(TutorialsEvent::LaunchCancelled);
+                return;
+            }
+            update = updates.recv() => update,
+        };
+        let Some(update) = update else {
+            break;
+        };
         match update {
             UpdateProgress::Step(step) => {
                 out.emit(TutorialsEvent::LaunchPreparing {
@@ -97,6 +122,10 @@ async fn launch(tutorial_id: i32, ctx: &ServiceCtx, out: &EventSink) {
             }
             UpdateProgress::Finished(result) => outcome = result,
         }
+    }
+    if cancel.is_cancelled() {
+        out.emit(TutorialsEvent::LaunchCancelled);
+        return;
     }
     if let Err(reason) = outcome {
         out.emit(TutorialsEvent::LaunchFailed {

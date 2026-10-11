@@ -26,6 +26,13 @@ export function LoadStatusNotice({
   onRetry?: () => void;
 }) {
   const { t } = useTranslation();
+  if (status.type === "cancelled") {
+    return (
+      <StatusNotice tone="info" action={onRetry ? { label: t("common.retry"), onClick: onRetry } : undefined}>
+        {t("status.activity.cancelled")}
+      </StatusNotice>
+    );
+  }
   if (status.type !== "failed") return null;
   return (
     <StatusNotice

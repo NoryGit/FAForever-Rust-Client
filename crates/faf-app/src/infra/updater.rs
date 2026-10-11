@@ -119,6 +119,15 @@ impl GameUpdaterClient {
 #[async_trait]
 impl GameUpdaterPort for GameUpdaterClient {
     async fn prepare(&self, request: GamePreparation) -> mpsc::Receiver<UpdateProgress> {
+        self.prepare_cancellable(request, tokio_util::sync::CancellationToken::new())
+            .await
+    }
+
+    async fn prepare_cancellable(
+        &self,
+        request: GamePreparation,
+        cancel: tokio_util::sync::CancellationToken,
+    ) -> mpsc::Receiver<UpdateProgress> {
         // Bounded, because progress is a status line: if the consumer falls
         // behind, dropping intermediate steps is correct and losing the
         // terminal `Finished` is not: hence `send().await` below, which
@@ -152,7 +161,11 @@ impl GameUpdaterPort for GameUpdaterClient {
                 }
             });
 
-            let outcome = client.run(&request, &report).await;
+            let outcome = tokio::select! {
+                biased;
+                () = cancel.cancelled() => Err("preparation cancelled".to_string()),
+                result = client.run(&request, &report) => result,
+            };
             drop(report); // closes `steps_rx`, ending the pump
             let _ = pump.await;
             let _ = tx.send(UpdateProgress::Finished(outcome)).await;

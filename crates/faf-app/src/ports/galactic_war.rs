@@ -67,6 +67,14 @@ pub trait GalacticWarPort: Send + Sync {
     /// error that means nothing to them.
     async fn install(&self, version: String) -> mpsc::Receiver<InstallProgress>;
 
+    async fn install_cancellable(
+        &self,
+        version: String,
+        _cancel: tokio_util::sync::CancellationToken,
+    ) -> mpsc::Receiver<InstallProgress> {
+        self.install(version).await
+    }
+
     /// Start the installed client. Returns once the process has been spawned,
     /// not once it has exited.
     ///

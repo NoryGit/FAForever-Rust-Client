@@ -7,7 +7,7 @@
 
 use faf_domain::state::{ModListStatus, ModsCommand, ModsEvent};
 
-use crate::runtime::{EventSink, LatestRequest, ServiceCtx};
+use crate::runtime::{CancellationSlot, EventSink, LatestRequest, ServiceCtx};
 
 /// The mod vault's request generation. Owned by this service.
 #[derive(Default)]
@@ -17,10 +17,12 @@ pub struct ModsContext {
     /// otherwise replace its page with results for filters no longer on
     /// screen.
     search_generation: LatestRequest,
+    catalogue: CancellationSlot,
 }
 
 pub async fn handle(cmd: ModsCommand, ctx: &ServiceCtx, out: &EventSink) {
     match cmd {
+        ModsCommand::CancelVaultLoad => ctx.mods.catalogue.cancel(),
         ModsCommand::LoadVault => {
             // Same guard, same reason, as `services::maps`: one crawl.
             if out.with_state(|state| {
@@ -142,12 +144,30 @@ pub async fn handle(cmd: ModsCommand, ctx: &ServiceCtx, out: &EventSink) {
 /// is wanted; the data already loaded stays on screen until this replaces it.
 async fn crawl_vault(ctx: &ServiceCtx, out: &EventSink) {
     crate::runtime::expect_admitted(crate::runtime::Key::ModVault);
+    let cancel = ctx.mods.catalogue.begin();
     out.emit(ModsEvent::VaultLoading);
     // Logged both ways with its duration, as the map vault's is: the crawl is
     // many pages, and the Live and Play tabs start it as they open.
     let started = std::time::Instant::now();
     tracing::info!("mod vault: loading the catalogue");
-    match ctx.ports.mods.list_vault().await {
+    let (progress_tx, mut progress_rx) = tokio::sync::mpsc::channel(32);
+    let request = ctx.ports.mods.list_vault_with_progress(Some(progress_tx));
+    tokio::pin!(request);
+    let result = loop {
+        tokio::select! {
+            biased;
+            () = cancel.cancelled() => {
+                out.emit(ModsEvent::VaultCancelled);
+                return;
+            }
+            result = &mut request => break result,
+            Some(progress) = progress_rx.recv() => out.emit(ModsEvent::VaultProgress { progress }),
+        }
+    };
+    while let Ok(progress) = progress_rx.try_recv() {
+        out.emit(ModsEvent::VaultProgress { progress });
+    }
+    match result {
         Ok(mods) => {
             tracing::info!(
                 mods = mods.len(),

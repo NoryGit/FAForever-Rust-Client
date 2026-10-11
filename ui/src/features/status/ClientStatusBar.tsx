@@ -3,6 +3,7 @@ import { Icon } from "../../design-system/Icon";
 import { ipc } from "../../ipc/client";
 import { useAppStore } from "../../store/store";
 import type {
+  AppCommand,
   AppState,
   ChatStatus,
   JoinState,
@@ -184,7 +185,9 @@ export function UploadTask({ status }: { status: UploadsState["status"] }) {
  * built the list would hand the store a new array every time and redraw the
  * bar on every state change.
  */
-function useBackgroundActivities(): string[] {
+type BackgroundActivity = string | { label: string; cancel: AppCommand; progress?: number };
+
+function useBackgroundActivities(): BackgroundActivity[] {
   const { t } = useTranslation();
   const mapInstall = useAppStore((s) => {
     const status = s.state.maps.installStatus;
@@ -235,8 +238,17 @@ function useBackgroundActivities(): string[] {
   const replaySearch = useAppStore((s) => s.state.replays.vaultStatus.type === "loading");
   const mapScan = useAppStore((s) => s.state.maps.installedStatus.type === "loading");
   const modScan = useAppStore((s) => s.state.mods.installedStatus.type === "loading");
-  const mapVault = useAppStore((s) => s.state.maps.vaultStatus.type === "loading");
-  const modVault = useAppStore((s) => s.state.mods.vaultStatus.type === "loading");
+  const mapVault = useAppStore((s) => s.state.maps.vaultStatus.type === "loading" ? s.state.maps.vaultProgress : undefined);
+  const modVault = useAppStore((s) => s.state.mods.vaultStatus.type === "loading" ? s.state.mods.vaultProgress : undefined);
+  const tutorial = useAppStore((s) => s.state.tutorials.launch.type === "preparing" ? s.state.tutorials.launch.payload.detail : null);
+  const galacticWar = useAppStore((s) => s.state.galacticWar.status);
+  const catalogue = (label: string, progress: AppState["maps"]["vaultProgress"], cancel: AppCommand): BackgroundActivity => ({
+    label: progress ? t(progress.totalPages === null ? "status.activity.cataloguePages" : "status.activity.cataloguePagesTotal", {
+      label, pages: progress.pages, total: progress.totalPages ?? 0,
+    }) : label,
+    cancel,
+    progress: progress?.totalPages ? Math.min(100, Math.round(100 * progress.pages / progress.totalPages)) : undefined,
+  });
   const leaderboards = useAppStore((s) =>
     s.state.leaderboard.catalogStatus.type === "loading"
     || s.state.leaderboard.ratingsStatus.type === "loading"
@@ -245,7 +257,14 @@ function useBackgroundActivities(): string[] {
   const tournaments = useAppStore((s) => s.state.tourney.status.type === "loading");
   const changelog = useAppStore((s) => s.state.changelog.status.type === "loading");
 
-  return [
+  const cancellable: BackgroundActivity[] = [];
+  if (tutorial !== null) cancellable.push({ label: tutorial, cancel: { kind: "Tutorials", command: { type: "cancelLaunch" } } });
+  if (galacticWar.type === "downloading" || galacticWar.type === "installing") {
+    cancellable.push({ label: `${t("lobby.galacticWar.short")}: ${t("lobby.galacticWar.action.working")}`, cancel: { kind: "GalacticWar", command: { type: "cancelInstall" } } });
+  }
+  if (mapVault !== undefined) cancellable.push(catalogue(t("maps.view.loadingVault"), mapVault, { kind: "Maps", command: { type: "cancelVaultLoad" } }));
+  if (modVault !== undefined) cancellable.push(catalogue(t("mods.view.loadingVault"), modVault, { kind: "Mods", command: { type: "cancelVaultLoad" } }));
+  return [...cancellable, ...[
     mapInstall !== null && t("status.activity.installingMap", { name: mapInstall }),
     modInstall !== null && t("status.activity.installingMod", { name: modInstall }),
     modToggle !== null && t("status.activity.togglingMod", { name: modToggle }),
@@ -255,19 +274,23 @@ function useBackgroundActivities(): string[] {
     replaySearch && t("replays.vault.searching"),
     mapScan && t("maps.view.scanning"),
     modScan && t("mods.installed.scanning"),
-    mapVault && t("maps.view.loadingVault"),
-    modVault && t("mods.view.loadingVault"),
+
     leaderboards && t("leaderboard.view.loadingCatalog"),
     events && t("events.loading"),
     tournaments && t("tournaments.loading"),
     changelog && t("changelog.loading"),
-  ].filter((label): label is string => typeof label === "string");
+  ].filter((label): label is string => typeof label === "string")];
 }
 
 /** The first background activity, and how many more are running behind it. */
-export function BackgroundActivityTask({ activities }: { activities: string[] }) {
+export function BackgroundActivityTask({ activities }: { activities: BackgroundActivity[] }) {
   const { t } = useTranslation();
-  const [first, ...rest] = activities;
+  if (activities.length === 0) return null;
+  const [activity, ...others] = activities;
+  const labelOf = (item: BackgroundActivity) => typeof item === "string" ? item : item.label;
+  const first = labelOf(activity);
+  const rest = others.map(labelOf);
+  const progress = typeof activity === "string" ? undefined : activity.progress;
   // The rest are named on hover rather than dropped: "+2" alone would say
   // that something is happening without saying what.
   const title = rest.length > 0 ? `${t("status.activity.alsoRunning")}: ${rest.join(", ")}` : first;
@@ -276,18 +299,26 @@ export function BackgroundActivityTask({ activities }: { activities: string[] })
       <span className="client-status-task-label" title={title}>{first}</span>
       <span
         className="client-status-progress"
-        data-indeterminate="true"
+        data-indeterminate={progress === undefined ? "true" : undefined}
         role="progressbar"
         aria-label={first}
         aria-valuemin={0}
         aria-valuemax={100}
-        aria-valuetext={t("status.active")}
+        aria-valuenow={progress}
+        aria-valuetext={first}
       >
-        <span />
+        <span style={progress === undefined ? undefined : { width: `${progress}%` }} />
       </span>
       <span className="client-status-task-percent" title={title}>
         {rest.length > 0 ? `+${rest.length}` : t("status.active")}
       </span>
+      {typeof activity !== "string" && (
+        <button type="button" className="client-status-task-action"
+          aria-label={`${t("common.cancel")}: ${first}`} title={t("common.cancel")}
+          onClick={() => ipc.send(activity.cancel)}>
+          <Icon name="close" size={12} />
+        </button>
+      )}
     </div>
   );
 }

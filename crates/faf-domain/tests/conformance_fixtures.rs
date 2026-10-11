@@ -3479,6 +3479,23 @@ fn cases() -> Vec<Case> {
     let mut cases = vec![
         // ── streams: FAF's own channels going live ──────────────────────
         case(
+            "background catalogue progress, cancellation and retry",
+            vec![
+                MapsEvent::VaultLoading.into(),
+                MapsEvent::VaultProgress { progress: maps::CatalogueProgress { pages: 2, total_pages: Some(5) } }.into(),
+                MapsEvent::VaultCancelled.into(),
+                MapsEvent::VaultLoading.into(),
+                MapsEvent::VaultLoaded { maps: vec![] }.into(),
+                ModsEvent::VaultLoading.into(),
+                ModsEvent::VaultProgress { progress: maps::CatalogueProgress { pages: 1, total_pages: None } }.into(),
+                ModsEvent::VaultCancelled.into(),
+                ModsEvent::VaultLoading.into(),
+                ModsEvent::VaultLoaded { mods: vec![] }.into(),
+                TutorialsEvent::LaunchPreparing { tutorial_id: 7, detail: "Preparing".into() }.into(),
+                TutorialsEvent::LaunchCancelled.into(),
+            ],
+        ),
+        case(
             "a channel goes live, is announced once, and goes off air",
             vec![
                 StreamsEvent::Checking.into(),

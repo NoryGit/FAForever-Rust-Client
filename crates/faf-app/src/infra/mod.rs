@@ -77,6 +77,7 @@ pub(crate) mod http;
 pub mod ice_java;
 pub mod ice_pioneer;
 pub mod ice_select;
+mod interrupted_work;
 pub mod irc;
 pub(crate) mod irc_session;
 pub(crate) mod java_runtime;
@@ -114,6 +115,7 @@ pub mod tutorials;
 pub mod updater;
 pub mod uploads;
 pub(crate) mod vault_install;
+pub use interrupted_work::cleanup_interrupted_work;
 
 pub use auth::FakeAuth;
 pub use changelog::{ChangelogClient, ChangelogConfig, FakeChangelog};

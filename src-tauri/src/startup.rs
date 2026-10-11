@@ -139,6 +139,7 @@ pub(crate) fn start_core(app: &tauri::App, backend_version: String) -> Arc<App> 
     // (`infra::LobbyClient`). Set FAF_FAKE_AUTH=1 to run fully offline
     // without a browser login during local dev.
     let ports = faf_app::infra::ports_from_env();
+    let cleanup_files = !ports.offline_auth;
     let (core, app_loop) = App::new(backend_version, ports);
     let core = Arc::new(core);
 
@@ -207,6 +208,13 @@ pub(crate) fn start_core(app: &tauri::App, backend_version: String) -> Arc<App> 
         {
             tracing::error!(%reason, "could not load startup settings");
             return;
+        }
+        if cleanup_files {
+            let generator_output = startup_core.snapshot().settings.map_generator.output_path;
+            let _ = tauri::async_runtime::spawn_blocking(move || {
+                faf_app::infra::cleanup_interrupted_work(&generator_output);
+            })
+            .await;
         }
         let _ = startup_core.try_dispatch(AppCommand::Auth(AuthCommand::Restore));
         let _ = startup_core.try_dispatch(AppCommand::Session(SessionCommand::Hello));

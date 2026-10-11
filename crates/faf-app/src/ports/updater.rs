@@ -124,6 +124,16 @@ pub trait GameUpdaterPort: Send + Sync {
     /// is due, exactly as both reference clients do.
     async fn prepare(&self, request: GamePreparation) -> mpsc::Receiver<UpdateProgress>;
 
+    /// Stop preparation without starting the game. Blocking writes retain
+    /// their install lease until they finish, even if the caller goes away.
+    async fn prepare_cancellable(
+        &self,
+        request: GamePreparation,
+        _cancel: tokio_util::sync::CancellationToken,
+    ) -> mpsc::Receiver<UpdateProgress> {
+        self.prepare(request).await
+    }
+
     /// Put each of these map folders where a live game looks for them,
     /// downloading the ones that are missing. Answers the folders that could
     /// not be fetched, with why; a failure is not fatal to the others.

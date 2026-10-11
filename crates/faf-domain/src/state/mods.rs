@@ -139,6 +139,7 @@ pub struct ModPreset {
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize, Type)]
 #[serde(tag = "type", content = "payload", rename_all = "camelCase")]
 pub enum ModListStatus {
+    Cancelled,
     #[default]
     Idle,
     Loading,
@@ -216,6 +217,8 @@ pub struct ModsState {
     /// deliberately not what the Mods tab browses; see `browse`.
     pub vault: Vec<VaultMod>,
     pub vault_status: ModListStatus,
+    #[serde(default)]
+    pub vault_progress: Option<crate::state::maps::CatalogueProgress>,
     /// One page of a server-side vault search, which is what the Mods tab
     /// shows.
     pub browse: Vec<VaultMod>,
@@ -241,6 +244,10 @@ pub struct ModsState {
 #[serde(tag = "type", content = "payload", rename_all = "camelCase")]
 pub enum ModsEvent {
     VaultLoading,
+    VaultProgress {
+        progress: crate::state::maps::CatalogueProgress,
+    },
+    VaultCancelled,
     VaultSearching,
     #[serde(rename_all = "camelCase")]
     VaultSearched {
@@ -311,6 +318,7 @@ pub enum ModsEvent {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
 #[serde(tag = "type", content = "payload", rename_all = "camelCase")]
 pub enum ModsCommand {
+    CancelVaultLoad,
     /// Fetch the whole catalogue once.
     LoadVault,
     /// Fetch the catalogue again even though it is loaded, for "Check for
@@ -320,13 +328,18 @@ pub enum ModsCommand {
     ReloadVault,
     /// Fetch one page of a vault search. Submit-driven, as in both reference
     /// clients.
-    SearchVault { query: ModVaultQuery },
+    SearchVault {
+        query: ModVaultQuery,
+    },
     /// Scan the user's mods folder (mirrors `MapsCommand::LoadInstalled`).
     LoadInstalled,
     /// Download and extract a mod version's zip (mirrors
     /// `MapsCommand::InstallMap`).
     #[serde(rename_all = "camelCase")]
-    InstallMod { uid: String, download_url: String },
+    InstallMod {
+        uid: String,
+        download_url: String,
+    },
     /// Ask how big these archives are, without downloading them.
     ///
     /// Exists for the dialog that asks whether a join may download mods: the
@@ -335,7 +348,9 @@ pub enum ModsCommand {
     /// storage server. One HEAD per mod, and the answer is cached in
     /// [`ModsState::download_sizes`] for the session.
     #[serde(rename_all = "camelCase")]
-    QueryDownloadSizes { targets: Vec<ModDownloadTarget> },
+    QueryDownloadSizes {
+        targets: Vec<ModDownloadTarget>,
+    },
     /// Replace an installed mod with the vault's current version.
     ///
     /// Not a client-side `uninstall` followed by an `install`, which is what
@@ -355,23 +370,39 @@ pub enum ModsCommand {
     },
     /// Delete a mod folder (mirrors `MapsCommand::UninstallMap`).
     #[serde(rename_all = "camelCase")]
-    UninstallMod { folder_name: String, uid: String },
+    UninstallMod {
+        folder_name: String,
+        uid: String,
+    },
     /// Enable or disable an installed mod without uninstalling it (writes
     /// `game.prefs`'s `active_mods` table).
     #[serde(rename_all = "camelCase")]
-    ToggleMod { uid: String, enabled: bool },
+    ToggleMod {
+        uid: String,
+        enabled: bool,
+    },
     /// Replace the active set with exactly `uids`.
     ///
     /// Deliberately not a loop over [`Self::ToggleMod`]: every toggle rewrites
     /// `game.prefs` *and* rescans the whole mods folder, so applying a preset one
     /// mod at a time costs a rescan per mod and walks the list through every
     /// intermediate state on screen. This is one write and one rescan.
-    SetActiveMods { uids: Vec<String> },
+    SetActiveMods {
+        uids: Vec<String>,
+    },
 }
 
 pub fn reduce(state: &mut ModsState, event: &ModsEvent) {
     match event {
-        ModsEvent::VaultLoading => state.vault_status = ModListStatus::Loading,
+        ModsEvent::VaultLoading => {
+            state.vault_status = ModListStatus::Loading;
+            state.vault_progress = None;
+        }
+        ModsEvent::VaultProgress { progress } => state.vault_progress = Some(progress.clone()),
+        ModsEvent::VaultCancelled => {
+            state.vault_status = ModListStatus::Cancelled;
+            state.vault_progress = None;
+        }
         ModsEvent::VaultLoaded { mods } => {
             state.vault = mods.clone();
             state.vault_status = ModListStatus::Ready;

@@ -20,7 +20,7 @@ use faf_domain::state::{
 };
 
 use crate::ports::GeneratorUpdate;
-use crate::runtime::{EventSink, ServiceCtx};
+use crate::runtime::{EventSink, LatestRequest, ServiceCtx};
 use crate::services;
 
 /// How many previews one `LoadPreviews` reads. Tiles ask one map at a time;
@@ -28,9 +28,24 @@ use crate::services;
 /// `MAX_KEPT_PREVIEWS` in `faf_domain::state::map_generator`.
 const MAX_PREVIEWS_PER_REQUEST: usize = 16;
 
+#[derive(Default)]
+pub struct MapGeneratorContext {
+    generation: LatestRequest,
+}
+
+impl MapGeneratorContext {
+    pub(crate) fn begin(&self) -> u64 {
+        self.generation.begin()
+    }
+    pub(crate) fn is_current(&self, generation: u64) -> bool {
+        self.generation.is_current(generation)
+    }
+}
+
 pub async fn handle(cmd: MapGeneratorCommand, ctx: &ServiceCtx, out: &EventSink) {
     match cmd {
         MapGeneratorCommand::GenerateNamed { map_name } => {
+            let generation = ctx.map_generator.begin();
             crate::runtime::expect_admitted(crate::runtime::Key::MapGenerator);
             // Announce the run before doing anything, so the status can never
             // still be reporting the *previous* run's result while this one is
@@ -48,6 +63,9 @@ pub async fn handle(cmd: MapGeneratorCommand, ctx: &ServiceCtx, out: &EventSink)
                 if !previews.is_empty() {
                     out.emit(MapGeneratorEvent::PreviewsLoaded { previews });
                 }
+                if !ctx.map_generator.is_current(generation) {
+                    return;
+                }
                 out.emit(MapGeneratorEvent::StatusChanged {
                     status: GeneratorStatus::Generated {
                         maps: vec![map_name],
@@ -56,18 +74,18 @@ pub async fn handle(cmd: MapGeneratorCommand, ctx: &ServiceCtx, out: &EventSink)
                 return;
             }
             let updates = ctx.ports.map_generator.generate_named(map_name).await;
-            // The same race as `Generate`'s, without a preflight to widen it.
-            if cancelled_before_start(out) {
-                ctx.ports.map_generator.cancel();
+            if cancelled_before_start(out) || !ctx.map_generator.is_current(generation) {
+                return;
             }
             // Kept or not on the same standing preference as a deliberate run.
             // This used to be exempt, on the grounds that a map reproduced for
             // a lobby join is not one the user sat down and asked for; with the
             // decision made once in Settings rather than per run, "keep
             // generated maps" means the ones on disk, however they got there.
-            drain(updates, ctx, out).await;
+            drain(updates, generation, ctx, out).await;
         }
         MapGeneratorCommand::Generate { options } => {
+            let generation = ctx.map_generator.begin();
             crate::runtime::expect_admitted(crate::runtime::Key::MapGenerator);
             out.emit(MapGeneratorEvent::StatusChanged {
                 status: GeneratorStatus::Preparing,
@@ -86,7 +104,7 @@ pub async fn handle(cmd: MapGeneratorCommand, ctx: &ServiceCtx, out: &EventSink)
                 // A run called off while it was being checked has no result to
                 // report either way: a refusal here would turn `Cancelled` into
                 // `Failed` and raise an error about options nobody is waiting on.
-                if cancelled_before_start(out) {
+                if cancelled_before_start(out) || !ctx.map_generator.is_current(generation) {
                     return;
                 }
                 match preflight {
@@ -108,21 +126,17 @@ pub async fn handle(cmd: MapGeneratorCommand, ctx: &ServiceCtx, out: &EventSink)
                     }
                 }
             }
-            // A Cancel pressed during the preflight reached no run: the port
-            // only stops a run in flight, and starting one clears any earlier
-            // cancellation. The Cancel handler marks the status instead, and
-            // a run called off before it began is not started at all.
-            if cancelled_before_start(out) {
+            // Cancellation during preflight prevents a JVM from being started.
+            if cancelled_before_start(out) || !ctx.map_generator.is_current(generation) {
                 return;
             }
             let updates = ctx.ports.map_generator.generate(options).await;
-            // A Cancel landing between the check above and the port clearing
-            // its flag would still be lost. Raised again, the run just started
-            // stops at its first look.
-            if cancelled_before_start(out) {
-                ctx.ports.map_generator.cancel();
+            // Dropping this receiver stops this run if cancellation landed
+            // while the port was starting it.
+            if cancelled_before_start(out) || !ctx.map_generator.is_current(generation) {
+                return;
             }
-            drain(updates, ctx, out).await;
+            drain(updates, generation, ctx, out).await;
         }
         MapGeneratorCommand::SetOptions { options } => {
             out.emit(MapGeneratorEvent::ValidationChanged {
@@ -234,12 +248,10 @@ pub async fn handle(cmd: MapGeneratorCommand, ctx: &ServiceCtx, out: &EventSink)
             }
         }
         MapGeneratorCommand::Cancel => {
-            // Still preparing means no run has reached the port yet, so its
-            // flag alone would be cleared by the run that follows. Recorded on
-            // the status first, which `Generate` checks before it starts one;
-            // in that order, so a check that misses the status is one the
-            // flag below still reaches.
-            if out.with_state(|state| state.map_generator.status == GeneratorStatus::Preparing) {
+            ctx.map_generator.begin();
+            // Invalidate progress first so a late terminal result cannot
+            // replace the cancelled status or a newer run's progress.
+            if out.with_state(|state| state.map_generator.status.is_busy()) {
                 out.emit(MapGeneratorEvent::StatusChanged {
                     status: GeneratorStatus::Cancelled,
                 });
@@ -365,11 +377,15 @@ fn cancelled_before_start(out: &EventSink) -> bool {
 /// retroactively condemn maps that were kept while it was on.
 async fn drain(
     mut updates: tokio::sync::mpsc::Receiver<GeneratorUpdate>,
+    generation: u64,
     ctx: &ServiceCtx,
     out: &EventSink,
 ) {
     let mut succeeded_maps: Vec<String> = Vec::new();
     while let Some(GeneratorUpdate::Status(status)) = updates.recv().await {
+        if !ctx.map_generator.is_current(generation) {
+            return;
+        }
         match &status {
             GeneratorStatus::Generated { maps } => {
                 succeeded_maps = maps.clone();

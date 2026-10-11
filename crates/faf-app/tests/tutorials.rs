@@ -90,6 +90,82 @@ impl GameUpdaterPort for ScriptedUpdater {
 
 struct StubTutorials(Vec<Tutorial>);
 
+#[derive(Default)]
+struct HeldUpdater {
+    sender: Mutex<Option<mpsc::Sender<UpdateProgress>>>,
+    cancel: Mutex<Option<tokio_util::sync::CancellationToken>>,
+}
+
+#[async_trait]
+impl GameUpdaterPort for HeldUpdater {
+    async fn prepare(&self, _request: GamePreparation) -> mpsc::Receiver<UpdateProgress> {
+        unreachable!("tutorial preparation must pass cancellation")
+    }
+    async fn prepare_cancellable(
+        &self,
+        _request: GamePreparation,
+        cancel: tokio_util::sync::CancellationToken,
+    ) -> mpsc::Receiver<UpdateProgress> {
+        let (tx, rx) = mpsc::channel(4);
+        *self.sender.lock().unwrap() = Some(tx);
+        *self.cancel.lock().unwrap() = Some(cancel);
+        rx
+    }
+}
+
+#[tokio::test]
+async fn cancelling_tutorial_preparation_never_launches_the_game() {
+    let updater = Arc::new(HeldUpdater::default());
+    let process = Arc::new(RecordingProcess::default());
+    let (app, app_loop) = App::new(
+        "test",
+        Ports {
+            tutorials: Arc::new(StubTutorials(vec![tutorial(7)])),
+            updater: updater.clone(),
+            process: process.clone(),
+            ..fake_ports()
+        },
+    );
+    tokio::spawn(app_loop.run());
+    app.dispatch_and_wait(TutorialsCommand::Load.into())
+        .await
+        .unwrap();
+    let app = Arc::new(app);
+    let launch = {
+        let app = app.clone();
+        tokio::spawn(async move {
+            app.dispatch_and_wait(TutorialsCommand::Launch { tutorial_id: 7 }.into())
+                .await
+                .unwrap();
+        })
+    };
+    tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        while updater.cancel.lock().unwrap().is_none() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    app.dispatch_and_wait(TutorialsCommand::CancelLaunch.into())
+        .await
+        .unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(2), launch)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(updater
+        .cancel
+        .lock()
+        .unwrap()
+        .as_ref()
+        .unwrap()
+        .is_cancelled());
+    assert_eq!(app.snapshot().tutorials.launch, TutorialLaunchStatus::Idle);
+    let sender = updater.sender.lock().unwrap().take().unwrap();
+    assert!(sender.send(UpdateProgress::Finished(Ok(()))).await.is_err());
+    assert!(process.offline.lock().unwrap().is_empty());
+}
+
 #[async_trait]
 impl TutorialsPort for StubTutorials {
     async fn list_tutorials(&self) -> Result<(Vec<TutorialCategory>, Vec<Tutorial>), String> {

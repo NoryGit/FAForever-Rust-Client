@@ -17,9 +17,11 @@ use tokio::sync::{broadcast, mpsc, oneshot, OwnedSemaphorePermit, Semaphore};
 use crate::ports::Ports;
 use crate::services;
 
+mod cancellation;
 mod census;
 mod command_policy;
 mod policies;
+pub use cancellation::CancellationSlot;
 pub(crate) use command_policy::{end_turn, expect_admitted, Key};
 use command_policy::{CommandAdmission, Lane};
 pub use policies::{
@@ -60,6 +62,9 @@ pub struct ServiceCtx {
     pub maps: services::maps::MapsContext,
     pub mods: services::mods::ModsContext,
     pub clan: services::clan::ClanContext,
+    pub tutorials: services::tutorials::TutorialsContext,
+    pub galactic_war: services::galactic_war::GalacticWarContext,
+    pub map_generator: services::map_generator::MapGeneratorContext,
 }
 
 /// The sink a service emits events into.
@@ -371,6 +376,9 @@ impl App {
             maps: services::maps::MapsContext::default(),
             mods: services::mods::ModsContext::default(),
             clan: services::clan::ClanContext::default(),
+            tutorials: services::tutorials::TutorialsContext::default(),
+            galactic_war: services::galactic_war::GalacticWarContext::default(),
+            map_generator: services::map_generator::MapGeneratorContext::default(),
         };
 
         let app = Self {

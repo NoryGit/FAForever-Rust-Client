@@ -26,6 +26,13 @@ pub trait MapsPort: Send + Sync {
     /// query, newest first).
     async fn list_vault(&self) -> Result<Vec<VaultMap>, String>;
 
+    async fn list_vault_with_progress(
+        &self,
+        _progress: Option<tokio::sync::mpsc::Sender<faf_domain::state::maps::CatalogueProgress>>,
+    ) -> Result<Vec<VaultMap>, String> {
+        self.list_vault().await
+    }
+
     /// One page of a server-side vault search. This is what the Maps tab
     /// browses; [`Self::list_vault`] only feeds the folder-name lookup index.
     async fn search_vault(&self, query: MapVaultQuery) -> Result<MapSearchPage, String>;

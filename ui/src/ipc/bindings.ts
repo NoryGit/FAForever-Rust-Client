@@ -723,6 +723,11 @@ export type Caster = {
 	name: string,
 };
 
+export type CatalogueProgress = {
+	pages: number,
+	totalPages: number | null,
+};
+
 export type ChangelogBlock = { type: "heading"; payload: {
 	level: number,
 	text: string,
@@ -2615,7 +2620,7 @@ export type GalacticWarAlltime = {
 	numPlayers?: number,
 };
 
-export type GalacticWarCommand =
+export type GalacticWarCommand = { type: "cancelInstall" } |
 /**
  *  Re-read what is installed, what the gateway advertises, and the season
  *  statistics. Cheap enough to run on entering the tab.
@@ -4566,7 +4571,7 @@ export type MapInstallStatus = { type: "idle" } | { type: "installing"; payload:
  *  (mirrors [`crate::state::VaultStatus`] for replays, kept local to avoid
  *  coupling the two slices).
  */
-export type MapListStatus = { type: "idle" } | { type: "loading" } | { type: "ready" } | { type: "failed"; payload: {
+export type MapListStatus = { type: "cancelled" } | { type: "idle" } | { type: "loading" } | { type: "ready" } | { type: "failed"; payload: {
 	reason: string,
 } };
 
@@ -4701,7 +4706,7 @@ export type MapVisibilityStatus = { type: "idle" } | { type: "working"; payload:
 	reason: string,
 } };
 
-export type MapsCommand =
+export type MapsCommand = { type: "cancelVaultLoad" } |
 /**  Fetch the whole catalogue once, as the folder-name lookup index. */
 { type: "loadVault" } |
 /**
@@ -4766,7 +4771,9 @@ export type MapsCommand =
 	hidden: boolean,
 } };
 
-export type MapsEvent = { type: "vaultLoading" } | { type: "vaultSearching" } |
+export type MapsEvent = { type: "vaultLoading" } | { type: "vaultProgress"; payload: {
+	progress: CatalogueProgress,
+} } | { type: "vaultCancelled" } | { type: "vaultSearching" } |
 /**
  *  One page of a vault search. Carries the query it answers so a late
  *  response cannot be mistaken for the current one.
@@ -4857,6 +4864,7 @@ export type MapsState = {
 	 */
 	vault: VaultMap[],
 	vaultStatus: MapListStatus,
+	vaultProgress?: CatalogueProgress | null,
 	/**
 	 *  One page of a server-side vault search, which is what the Maps tab
 	 *  shows. Both reference clients browse this way rather than filtering a
@@ -5197,7 +5205,7 @@ export type ModInstallStatus = { type: "idle" } | { type: "installing"; payload:
  *  [`ModInstallStatus`]/[`ModToggleStatus`], mirrors
  *  [`crate::state::MapListStatus`].
  */
-export type ModListStatus = { type: "idle" } | { type: "loading" } | { type: "ready" } | { type: "failed"; payload: {
+export type ModListStatus = { type: "cancelled" } | { type: "idle" } | { type: "loading" } | { type: "ready" } | { type: "failed"; payload: {
 	reason: string,
 } };
 
@@ -5337,7 +5345,7 @@ export type ModerationReportSummary = {
 	status: string,
 };
 
-export type ModsCommand =
+export type ModsCommand = { type: "cancelVaultLoad" } |
 /**  Fetch the whole catalogue once. */
 { type: "loadVault" } |
 /**
@@ -5419,7 +5427,9 @@ export type ModsCommand =
 	uids: string[],
 } };
 
-export type ModsEvent = { type: "vaultLoading" } | { type: "vaultSearching" } | { type: "vaultSearched"; payload: {
+export type ModsEvent = { type: "vaultLoading" } | { type: "vaultProgress"; payload: {
+	progress: CatalogueProgress,
+} } | { type: "vaultCancelled" } | { type: "vaultSearching" } | { type: "vaultSearched"; payload: {
 	mods: VaultMod[],
 	query: ModVaultQuery,
 	totalPages: number | null,
@@ -5479,6 +5489,7 @@ export type ModsState = {
 	 */
 	vault: VaultMod[],
 	vaultStatus: ModListStatus,
+	vaultProgress?: CatalogueProgress | null,
 	/**
 	 *  One page of a server-side vault search, which is what the Mods tab
 	 *  shows.
@@ -11912,13 +11923,13 @@ export type TutorialLaunchStatus = { type: "idle" } | { type: "preparing"; paylo
 	reason: string,
 } };
 
-export type TutorialsCommand = { type: "load" } | { type: "select"; payload: {
+export type TutorialsCommand = { type: "cancelLaunch" } | { type: "load" } | { type: "select"; payload: {
 	tutorialId: number,
 } } | { type: "launch"; payload: {
 	tutorialId: number,
 } };
 
-export type TutorialsEvent = { type: "loading" } | { type: "loaded"; payload: {
+export type TutorialsEvent = { type: "launchCancelled" } | { type: "loading" } | { type: "loaded"; payload: {
 	categories: TutorialCategory[],
 	tutorials: Tutorial[],
 } } | { type: "loadFailed"; payload: {

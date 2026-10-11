@@ -315,6 +315,7 @@ where
 ///
 /// `validate_contents` is handed the staged directory before it is renamed, so
 /// a caller can insist the files it expects are actually in there.
+#[cfg(test)]
 pub fn install_flat_archive<F>(
     bytes: &[u8],
     target: &Path,
@@ -329,6 +330,26 @@ where
         target,
         subject,
         validate_contents,
+        None,
+    )
+}
+
+pub(crate) fn install_flat_archive_cancellable<F>(
+    bytes: &[u8],
+    target: &Path,
+    subject: &str,
+    validate_contents: F,
+    cancel: &tokio_util::sync::CancellationToken,
+) -> Result<(), String>
+where
+    F: FnOnce(&Path) -> Result<(), String>,
+{
+    install_flat_archive_from(
+        || Ok(std::io::Cursor::new(bytes)),
+        target,
+        subject,
+        validate_contents,
+        Some(cancel),
     )
 }
 
@@ -337,6 +358,7 @@ fn install_flat_archive_from<R, O, F>(
     target: &Path,
     subject: &str,
     validate_contents: F,
+    cancel: Option<&tokio_util::sync::CancellationToken>,
 ) -> Result<(), String>
 where
     R: std::io::Read + std::io::Seek,
@@ -359,8 +381,9 @@ where
     std::fs::create_dir(&staging)
         .map_err(|error| format!("could not create install staging folder: {error}"))?;
     let outcome = (|| {
-        extract_archive(open()?, &staging, subject)?;
+        extract_archive_checked(open()?, &staging, subject, cancel)?;
         validate_contents(&staging)?;
+        check_cancelled(cancel)?;
         std::fs::rename(&staging, target)
             .map_err(|error| format!("could not finish installing {}: {error}", target.display()))
     })();
@@ -377,6 +400,74 @@ fn unique_staging_path(destination: &Path) -> PathBuf {
             return candidate;
         }
     }
+}
+
+pub(crate) fn is_install_staging_name(name: &str) -> bool {
+    name.strip_prefix(".faf-install-").is_some_and(|suffix| {
+        suffix.len() == 16 && suffix.bytes().all(|byte| byte.is_ascii_hexdigit())
+    })
+}
+
+/// Stage and validate a replacement before moving the installed directory.
+/// The recovery record lets startup restore the old copy after a hard kill
+/// between the two renames. Failed extraction never touches the old copy.
+pub(crate) fn replace_archive<F>(
+    bytes: &[u8],
+    destination: &Path,
+    previous: &Path,
+    validate_contents: F,
+) -> Result<PathBuf, String>
+where
+    F: FnOnce(&Path) -> Result<(), String>,
+{
+    let root = inspect_archive(std::io::Cursor::new(bytes), None)?;
+    let target = destination.join(root);
+    let relative = previous
+        .strip_prefix(destination)
+        .map_err(|_| "replacement is outside the install folder".to_string())?;
+    let same_target = target == previous
+        || (cfg!(windows)
+            && target
+                .to_string_lossy()
+                .eq_ignore_ascii_case(&previous.to_string_lossy()));
+    if !same_target && target.exists() {
+        return Err("the replacement folder is already occupied".into());
+    }
+    let staging = unique_staging_path(destination);
+    std::fs::create_dir_all(&staging)
+        .map_err(|error| format!("could not create replacement staging folder: {error}"))?;
+    let outcome = (|| {
+        let incoming = staging.join("incoming");
+        extract_archive(std::io::Cursor::new(bytes), &incoming, "mod archive")?;
+        let staged = incoming.join(target.file_name().unwrap());
+        validate_contents(&staged)?;
+        let record = serde_json::json!({
+            "previous": relative,
+            "target": target.strip_prefix(destination).unwrap(),
+        });
+        std::fs::write(staging.join("restore.json"), record.to_string())
+            .map_err(|error| format!("could not record replacement recovery: {error}"))?;
+        let backup = staging.join("previous");
+        let had_previous = previous.exists();
+        if had_previous {
+            std::fs::rename(previous, &backup)
+                .map_err(|error| format!("could not move the installed mod aside: {error}"))?;
+        }
+        if let Err(error) = std::fs::rename(&staged, &target) {
+            if had_previous {
+                std::fs::rename(&backup, previous).map_err(|restore| {
+                    format!("could not install the replacement: {error}; could not restore the old mod: {restore}")
+                })?;
+            }
+            return Err(format!("could not install the replacement: {error}"));
+        }
+        Ok(target)
+    })();
+    // A failed rollback must retain the only remaining copy for startup recovery.
+    if !staging.join("previous").exists() || outcome.is_ok() {
+        let _ = std::fs::remove_dir_all(&staging);
+    }
+    outcome
 }
 
 /// Bounds every archive must respect before a single entry is read.
@@ -537,10 +628,28 @@ fn extract_archive<R: std::io::Read + std::io::Seek>(
     destination: &Path,
     subject: &str,
 ) -> Result<(), String> {
+    extract_archive_checked(reader, destination, subject, None)
+}
+
+fn check_cancelled(cancel: Option<&tokio_util::sync::CancellationToken>) -> Result<(), String> {
+    if cancel.is_some_and(|token| token.is_cancelled()) {
+        Err("installation cancelled".into())
+    } else {
+        Ok(())
+    }
+}
+
+fn extract_archive_checked<R: std::io::Read + std::io::Seek>(
+    reader: R,
+    destination: &Path,
+    subject: &str,
+    cancel: Option<&tokio_util::sync::CancellationToken>,
+) -> Result<(), String> {
     let mut archive = zip::ZipArchive::new(reader)
         .map_err(|error| format!("not a valid zip archive: {error}"))?;
     let mut remaining = MAX_EXPANDED_BYTES;
     for index in 0..archive.len() {
+        check_cancelled(cancel)?;
         let mut entry = archive
             .by_index(index)
             .map_err(|error| format!("could not read archive entry: {error}"))?;
@@ -855,5 +964,60 @@ mod tests {
             .unwrap();
         assert!(entries.is_empty());
         std::fs::remove_dir_all(temp).unwrap();
+    }
+
+    #[test]
+    fn a_replacement_failure_preserves_the_old_version_and_success_swaps_it() {
+        let root = temp_dir("replace");
+        let old = root.join("mod");
+        std::fs::create_dir_all(&old).unwrap();
+        std::fs::write(old.join("mod_info.lua"), "old").unwrap();
+        let bytes = zip(&[("mod/mod_info.lua", b"new")]);
+        assert!(replace_archive(&bytes, &root, &old, |_| Err("wrong uid".into())).is_err());
+        assert_eq!(
+            std::fs::read_to_string(old.join("mod_info.lua")).unwrap(),
+            "old"
+        );
+        assert!(replace_archive(b"broken zip", &root, &old, |_| Ok(())).is_err());
+        assert_eq!(
+            std::fs::read_to_string(old.join("mod_info.lua")).unwrap(),
+            "old"
+        );
+        replace_archive(&bytes, &root, &old, |_| Ok(())).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(old.join("mod_info.lua")).unwrap(),
+            "new"
+        );
+        assert_eq!(std::fs::read_dir(&root).unwrap().count(), 1);
+        let differently_cased = zip(&[("MOD/mod_info.lua", b"newer")]);
+        let updated = replace_archive(&differently_cased, &root, &old, |_| Ok(())).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(updated.join("mod_info.lua")).unwrap(),
+            "newer"
+        );
+        assert_eq!(std::fs::read_dir(&root).unwrap().count(), 1);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn cancellation_before_flat_install_commit_discards_staging() {
+        let root = temp_dir("flat-cancel");
+        let target = root.join("version");
+        let bytes = zip(&[("client.exe", b"binary")]);
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let result = install_flat_archive_cancellable(
+            &bytes,
+            &target,
+            "client",
+            |_| {
+                cancel.cancel();
+                Ok(())
+            },
+            &cancel,
+        );
+        assert!(result.is_err());
+        assert!(!target.exists());
+        assert_eq!(std::fs::read_dir(&root).unwrap().count(), 0);
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

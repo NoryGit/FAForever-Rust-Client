@@ -8,8 +8,12 @@ const MAX_LOCAL_PREVIEWS = 128;
 
 export function reduceMaps(state: MapsState, event: MapsEvent): MapsState {
   switch (event.type) {
+    case "vaultProgress":
+      return { ...state, vaultProgress: event.payload.progress };
+    case "vaultCancelled":
+      return { ...state, vaultStatus: { type: "cancelled" }, vaultProgress: null };
     case "vaultLoading":
-      return { ...state, vaultStatus: { type: "loading" } };
+      return { ...state, vaultStatus: { type: "loading" }, vaultProgress: null };
     // Merged with what folder lookups already added: see the Rust twin.
     case "vaultLoaded": {
       const loaded = new Set(event.payload.maps.map((map) => map.versionId));

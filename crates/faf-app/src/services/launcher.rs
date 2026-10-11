@@ -316,6 +316,9 @@ async fn prepare_map_and_mod(
 
     let cache_rolling_branches = out.with_state(|state| state.settings.game.cache_rolling_branches);
     ensure_generated_map(map, ctx, out).await?;
+    if ctx.lobby.launch_cancelled() {
+        return Ok(());
+    }
     prepare_request(
         GamePreparation {
             featured_mod: featured_mod.to_string(),
@@ -357,6 +360,10 @@ async fn ensure_generated_map(
     }
 
     tracing::info!(map_name, "generating map required by launch");
+    if ctx.lobby.launch_cancelled() {
+        return Ok(());
+    }
+    let generation = ctx.map_generator.begin();
     let mut updates = ctx
         .ports
         .map_generator
@@ -367,7 +374,30 @@ async fn ensure_generated_map(
     // routinely takes tens of seconds.
     let mut outcome = Err("the map generator produced no result".to_string());
     let mut generated: Vec<String> = Vec::new();
-    while let Some(crate::ports::GeneratorUpdate::Status(status)) = updates.recv().await {
+    loop {
+        let update = tokio::select! {
+            update = updates.recv() => update,
+            () = tokio::time::sleep(CANCEL_POLL) => {
+                if ctx.lobby.launch_cancelled() {
+                    if ctx.map_generator.is_current(generation) {
+                        out.emit(MapGeneratorEvent::StatusChanged { status: GeneratorStatus::Cancelled });
+                    }
+                    return Ok(());
+                }
+                continue;
+            }
+        };
+        if ctx.lobby.launch_cancelled() {
+            if ctx.map_generator.is_current(generation) {
+                out.emit(MapGeneratorEvent::StatusChanged {
+                    status: GeneratorStatus::Cancelled,
+                });
+            }
+            return Ok(());
+        }
+        let Some(crate::ports::GeneratorUpdate::Status(status)) = update else {
+            break;
+        };
         match &status {
             GeneratorStatus::Generated { maps } => {
                 generated = maps.clone();
@@ -378,7 +408,9 @@ async fn ensure_generated_map(
             }
             _ => {}
         }
-        out.emit(MapGeneratorEvent::StatusChanged { status });
+        if ctx.map_generator.is_current(generation) {
+            out.emit(MapGeneratorEvent::StatusChanged { status });
+        }
     }
     // The same bookkeeping a deliberate run gets. Joining a lobby whose map
     // had to be built used to skip all of it, which is why the client went on
@@ -442,51 +474,42 @@ async fn prepare_request(
     ctx: &ServiceCtx,
     out: &EventSink,
 ) -> Result<(), String> {
-    // Held while this preparation is wanted, and let go the moment it is
-    // called off: a cancelled join drains its updater below, which can take as
-    // long as the file it is on, and the join that replaced it must not wait
-    // behind that. The cancelled run no longer narrates anything, so the two
-    // never compete for the screen; that they may briefly share the disk is
-    // what the client did before preparations were serialized at all.
-    let mut one_at_a_time = Some(PREPARATION.lock().await);
-    let mut updates = ctx.ports.updater.prepare(request).await;
-
-    // The port always ends with `Finished`; treating a stream that closes
-    // without one as a failure keeps a panicked adapter task from looking like
-    // a successful update.
+    let _one_at_a_time = loop {
+        tokio::select! {
+            lease = PREPARATION.lock() => break lease,
+            () = tokio::time::sleep(CANCEL_POLL) => {
+                if ctx.lobby.launch_cancelled() { return Ok(()); }
+            }
+        }
+    };
+    if ctx.lobby.launch_cancelled() {
+        return Ok(());
+    }
+    let cancel = tokio_util::sync::CancellationToken::new();
+    let mut updates = ctx
+        .ports
+        .updater
+        .prepare_cancellable(request, cancel.clone())
+        .await;
     let mut outcome = Err("the game updater stopped without finishing".to_string());
     loop {
         let update = tokio::select! {
             update = updates.recv() => update,
-            // A cancellation is a flag rather than an event, so while the lock
-            // is still held it is looked at between updates as well: an
-            // updater stuck on a slow download sends nothing for a while.
-            () = tokio::time::sleep(CANCEL_POLL), if one_at_a_time.is_some() => {
+            () = tokio::time::sleep(CANCEL_POLL) => {
                 if ctx.lobby.launch_cancelled() {
-                    one_at_a_time = None;
+                    cancel.cancel();
+                    return Ok(());
                 }
                 continue;
             }
         };
+        if ctx.lobby.launch_cancelled() {
+            cancel.cancel();
+            return Ok(());
+        }
         let Some(update) = update else {
             break;
         };
-        // The step boundary where a cancelled join stops being narrated.
-        //
-        // This is the check, and it has to be here rather than after the loop:
-        // the updater keeps working through its remaining steps, each one an
-        // event that puts the join back into `Preparing`. Reading the flag only
-        // once the loop had finished meant Cancel stopped the *game* from
-        // starting while the progress dialog reopened on every step after it,
-        // which is the bug this fixes.
-        //
-        // The stream is drained rather than dropped, so the updater finishes
-        // the file it is on and nothing is left half-written in the content
-        // store. It is just no longer anybody's business on screen.
-        if ctx.lobby.launch_cancelled() {
-            one_at_a_time = None;
-            continue;
-        }
         match update {
             UpdateProgress::Step(step) => out.emit(LobbyEvent::Preparing {
                 phase: preparation_phase(step.phase),
@@ -495,12 +518,6 @@ async fn prepare_request(
             }),
             UpdateProgress::Finished(result) => outcome = result,
         }
-    }
-    // A cancelled preparation has no outcome worth reporting: the caller checks
-    // the same flag and returns without touching the join state, and an error
-    // here would be shown to somebody who asked for this.
-    if ctx.lobby.launch_cancelled() {
-        return Ok(());
     }
     outcome
 }

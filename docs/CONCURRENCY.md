@@ -33,15 +33,15 @@ run concurrently with everything.
 
 | Key / guard | Commands | May overlap | Same kind while one runs | Cancellation | Pinned by |
 |---|---|---|---|---|---|
-| `MapVault` (single-flight) | `Maps::LoadVault` | everything else | dropped; a loaded catalogue is also skipped, a failed one is retried | none | `command_contracts::a_second_single_flight_command_*`, `map_vault_load.rs` |
-| `ModVault` (single-flight) | `Mods::{LoadVault, ReloadVault}` | everything else | dropped | none | `command_contracts::a_second_single_flight_command_*`, `failure_paths::a_failed_mod_vault_load_*`, `mods_reload.rs` |
+| `MapVault` (single-flight) | `Maps::LoadVault` | everything else | dropped; a loaded catalogue is also skipped, a failed one is retried | `Maps::CancelVaultLoad` drops all pending page requests; progress reports completed pages; retry is explicit | `command_contracts::a_second_single_flight_command_*`, `map_vault_load.rs` |
+| `ModVault` (single-flight) | `Mods::{LoadVault, ReloadVault}` | everything else | dropped | `Mods::CancelVaultLoad` drops all pending page and review requests; progress reports completed pages | `command_contracts::a_second_single_flight_command_*`, `failure_paths::a_failed_mod_vault_load_*`, `mods_reload.rs` |
 | `Changelog` (single-flight) | `Changelog::Load` | `Changelog::Select` | dropped (the running load selects the newest patch itself) | none | `command_contracts::a_second_single_flight_command_*`, `changelog.rs` |
 | `MapGenerator` (single-flight) | `MapGenerator::{Generate, GenerateNamed, CleanUp}` | options, presets, previews | dropped | `MapGenerator::Cancel`: during the preflight the run is never started; during a run the port stops it; ends `Cancelled`, no notification, nothing recorded, key free again | `command_contracts::a_second_single_flight_command_*`, `failure_paths::cancelling_*` |
 | `Upload` (single-flight) | `Uploads::Start` | `Open`, `Close`, `SetRanked` | dropped | none: closing the dialog hides a running publish, it does not stop it | `command_contracts::a_second_single_flight_command_*`, `uploads.rs` |
 | `ClientUpdate` (single-flight) | `ClientUpdate::{Check, Download, Install}` | `Dismiss` | dropped (also for the startup and six-hourly checks, which go through `run_command`) | none | `command_contracts::a_second_single_flight_command_*`, `client_update.rs` |
-| `GalacticWar` (single-flight) | `GalacticWar::{Install, Play}` | `Refresh*` | dropped | none | `command_contracts::a_second_single_flight_command_*` |
+| `GalacticWar` (single-flight) | `GalacticWar::{Install, Play}` | `Refresh*` | dropped | `GalacticWar::CancelInstall` stops download or extraction before commit; a completed install stays recorded but Play never auto-launches after cancellation | `command_contracts::a_second_single_flight_command_*` |
 | `GuidesSignIn` (single-flight) | `Guides::SignIn` | everything else | dropped | `Guides::CancelSignIn` stops the polling through the port | `command_contracts::a_second_single_flight_command_*` |
-| `TutorialLaunch` (single-flight) | `Tutorials::Launch` | `Load`, `Select` | dropped | none | `command_contracts::a_second_single_flight_command_*`, `tutorials.rs` |
+| `TutorialLaunch` (single-flight) | `Tutorials::Launch` | `Load`, `Select` | dropped | `Tutorials::CancelLaunch` cancels updater preparation and prevents launch | `command_contracts::a_second_single_flight_command_*`, `tutorials.rs` |
 | `MapFiles` (serial) | `Maps::{InstallMap, UninstallMap}` | everything else | queued, dispatch order | none | `command_contracts::serial_commands_*` |
 | `ModFiles` (serial) | `Mods::{InstallMod, UpdateMod, UninstallMod, ToggleMod, SetActiveMods}` | everything else | queued, dispatch order | none | `command_contracts::serial_commands_*` |
 | `GuidesVerdict` (serial) | `Guides::{Accept, Reject}` | everything else | queued, dispatch order | none | `command_contracts::serial_commands_*` |
@@ -101,3 +101,20 @@ Known gaps:
 - The lobby's `match_generation` (the found-match watchdog) is unit-tested in
   `services/lobby/matchmaking.rs` only; an integration test would need paused
   time.
+
+## Interrupted work on disk
+
+Real-client startup sweeps only private `.faf-install-<16 hex digits>`
+directories in the configured maps, mods, generator output and Galactic War
+folders, `.faf-download-<16 hex digits>` files in the client temp directory,
+`upload-{map,mod}-<pid>.zip` files in the cache, and versioned
+`MapGenerator_*.partial` downloads in the configured generator cache. Links
+and unrelated names are retained. Replacement recovery restores the old mod if a hard kill landed
+between moving it aside and publishing the staged replacement; invalid recovery
+records are retained rather than deleting the only remaining copy.
+
+Generated maps are written into private staging under a per-generator lease.
+Dropping a join or replay's progress receiver cancels that run, not another run.
+Only completed maps are moved into the selected output directory. The stdout
+and stderr readers decode lines lossily so Windows console code-page bytes do
+not close progress reporting.
