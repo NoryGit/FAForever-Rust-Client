@@ -247,6 +247,8 @@ export const pl: Partial<Record<MessageKey, Message>> = {
   "notifications.msg.cannotInvite.title": "Nie można teraz zaprosić",
   "notifications.msg.cannotInvite.body": "Zatrzymaj wyszukiwanie, zanim zaprosisz kogoś do drużyny.",
   "notifications.msg.cannotJoinParty.title": "Nie można dołączyć do drużyny",
+  "notifications.msg.contactChangeFailed.title": "Nie udało się zaktualizować kontaktów",
+  "notifications.msg.contactChangeFailed.body": "Sprawdź połączenie z lobby i spróbuj ponownie.",
   "notifications.msg.searchFailed.title": "Nie udało się rozpocząć wyszukiwania",
   "notifications.msg.hostFailed.title": "Nie udało się utworzyć gry",
   "notifications.msg.matchDidNotStart.title": "Mecz się nie rozpoczął",

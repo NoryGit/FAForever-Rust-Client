@@ -10,7 +10,7 @@
 
 use async_trait::async_trait;
 use faf_domain::state::{
-    AvailableAvatar, Game, GameLaunch, HostGameConfig, MatchmakerQueue, MatchmakingState,
+    AvailableAvatar, Contact, Game, GameLaunch, HostGameConfig, MatchmakerQueue, MatchmakingState,
     PartyState, PlayerProfile, PlayerVeto, Relation,
 };
 use serde_json::Value;
@@ -178,17 +178,15 @@ pub trait LobbyPort: Send + Sync {
     /// Set the factions this player is willing to receive in matchmaker games.
     fn set_party_factions(&self, factions: Vec<String>);
 
-    /// Add or remove a friend/foe (`social_add` / `social_remove`).
-    ///
-    /// Fire-and-forget: the server sends no acknowledgement and does not echo a
-    /// fresh `social` message, which is why the caller updates local state
-    /// optimistically: both reference clients do the same.
-    fn set_relation(&self, player_id: i32, relation: Relation, member: bool);
-
-    /// Keep a newly added offline account's known name in the live directory.
-    fn set_contact_relation(&self, contact: faf_domain::state::Contact, member: bool) {
-        self.set_relation(contact.player_id, contact.relation, member);
-    }
+    /// Queue a friend/foe change, including the removal of an opposite
+    /// relation when switching lists. Returns false if neither could be queued.
+    /// The server sends no acknowledgement for these messages.
+    fn set_contact_relation(
+        &self,
+        contact: Contact,
+        member: bool,
+        remove: Option<Relation>,
+    ) -> bool;
 
     fn set_player_vetoes(&self, vetoes: Vec<PlayerVeto>);
 

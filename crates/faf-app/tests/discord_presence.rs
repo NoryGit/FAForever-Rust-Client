@@ -60,7 +60,14 @@ impl LobbyPort for ScriptedLobby {
     fn invite_to_party(&self, _player_id: i32) {}
     fn accept_party_invite(&self, _player_id: i32) {}
     fn set_party_factions(&self, _factions: Vec<String>) {}
-    fn set_relation(&self, _player_id: i32, _relation: Relation, _member: bool) {}
+    fn set_contact_relation(
+        &self,
+        _contact: faf_domain::state::Contact,
+        _member: bool,
+        _remove: Option<Relation>,
+    ) -> bool {
+        false
+    }
     fn set_player_vetoes(&self, _vetoes: Vec<PlayerVeto>) {}
     fn request_avatars(&self) -> bool {
         self.updates.lock().unwrap().is_some()

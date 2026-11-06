@@ -3425,6 +3425,8 @@ export const de: Partial<Record<MessageKey, Message>> = {
   "notifications.msg.cannotInvite.title": "Einladen gerade nicht möglich",
   "notifications.msg.cannotInvite.body": "Beende die Suche, bevor du jemanden in die Gruppe einlädst.",
   "notifications.msg.cannotJoinParty.title": "Beitritt zur Gruppe nicht möglich",
+  "notifications.msg.contactChangeFailed.title": "Kontakte konnten nicht aktualisiert werden",
+  "notifications.msg.contactChangeFailed.body": "Prüfe die Lobby-Verbindung und versuche es erneut.",
   "notifications.msg.searchFailed.title": "Suche konnte nicht gestartet werden",
   "notifications.msg.hostFailed.title": "Partie konnte nicht gehostet werden",
   "notifications.msg.matchDidNotStart.title": "Match ist nicht gestartet",

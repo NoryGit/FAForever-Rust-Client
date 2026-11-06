@@ -3865,6 +3865,8 @@ export const en = {
   "notifications.msg.cannotInvite.title": "Cannot invite now",
   "notifications.msg.cannotInvite.body": "Stop the search before inviting somebody to the party.",
   "notifications.msg.cannotJoinParty.title": "Cannot join the party",
+  "notifications.msg.contactChangeFailed.title": "Could not update contacts",
+  "notifications.msg.contactChangeFailed.body": "Check the lobby connection and try again.",
   "notifications.msg.searchFailed.title": "Could not start the search",
   "notifications.msg.hostFailed.title": "Could not host game",
   "notifications.msg.matchDidNotStart.title": "Match did not start",

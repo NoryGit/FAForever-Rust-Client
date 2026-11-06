@@ -289,6 +289,7 @@ pub struct App {
     /// when the command loop may already be gone.
     settings: Arc<dyn crate::ports::SettingsPort>,
     map_generator: Arc<dyn crate::ports::MapGeneratorPort>,
+    generated_map_protection: SerialMutation,
 }
 
 /// The command-processing loop. Spawn `run()` on any async runtime.
@@ -487,6 +488,7 @@ impl App {
             lesson_results: ctx.training.lesson_results.clone(),
             settings,
             map_generator,
+            generated_map_protection: ctx.settings.generated_map_protection.clone(),
         };
         let app_loop = AppLoop {
             cmd_rx,
@@ -665,19 +667,23 @@ impl App {
     /// good unless somebody went and pressed it.
     ///
     /// Spared as by that button: favourites, and the maps on the keep list.
-    /// Both come from the settings file rather than the state, as there: a
-    /// state whose settings never loaded would spare nothing. A file that
-    /// cannot be read deletes nothing, and so does a running game, whose map
-    /// Windows would leave half deleted.
+    /// Merge saved and live protections so a pending settings write cannot
+    /// lose a favourite. An unreadable file or a running game skips deletion.
     pub async fn sweep_generated_maps(&self) -> Result<usize, String> {
+        let _protection = self.generated_map_protection.acquire().await;
         if self.process.game_running() {
             return Ok(0);
         }
-        let Some(settings) = self.settings.load().await else {
-            return Err("the settings file could not be read".into());
-        };
-        let protected = crate::services::map_generator::protected_generated_maps(&settings);
-        self.map_generator.clean_up(&protected).await
+        crate::services::map_generator::clean_up_generated_maps(
+            self.settings.as_ref(),
+            self.map_generator.as_ref(),
+            || {
+                self.with_state(|state| {
+                    crate::services::map_generator::protected_generated_maps(&state.settings)
+                })
+            },
+        )
+        .await
     }
 }
 
@@ -1129,6 +1135,39 @@ mod tests {
         // A cancellation still gets through: it has a queue of its own.
         app.try_dispatch(faf_domain::state::LobbyCommand::CancelJoin.into())
             .expect("a cancellation must not wait behind a full ordinary queue");
+    }
+
+    #[tokio::test]
+    async fn replay_open_waits_for_capacity_before_navigating() {
+        use faf_domain::state::{ReplayCommand, SocialCommand, Tab};
+
+        let (app, app_loop) = App::new("test", crate::infra::fake_ports());
+        while app
+            .try_dispatch(
+                SocialCommand::LookUpLogin {
+                    login: String::new(),
+                }
+                .into(),
+            )
+            .is_ok()
+        {}
+        let opening = app.dispatch_and_wait(
+            ReplayCommand::OpenFile {
+                path: "fixture.fafreplay".into(),
+            }
+            .into(),
+        );
+        tokio::pin!(opening);
+        assert!(futures_util::poll!(&mut opening).is_pending());
+        assert_ne!(app.snapshot().nav.active_tab, Tab::Replays);
+
+        let task = tokio::spawn(app_loop.run());
+        tokio::time::timeout(std::time::Duration::from_secs(2), opening)
+            .await
+            .expect("the replay open reached the core")
+            .unwrap();
+        assert_eq!(app.snapshot().nav.active_tab, Tab::Replays);
+        task.abort();
     }
 
     #[test]

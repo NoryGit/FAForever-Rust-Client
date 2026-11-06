@@ -245,6 +245,8 @@ export const es: Partial<Record<MessageKey, Message>> = {
   "notifications.msg.cannotInvite.title": "No se puede invitar ahora",
   "notifications.msg.cannotInvite.body": "Detén la búsqueda antes de invitar a alguien al grupo.",
   "notifications.msg.cannotJoinParty.title": "No se puede unir al grupo",
+  "notifications.msg.contactChangeFailed.title": "No se pudieron actualizar los contactos",
+  "notifications.msg.contactChangeFailed.body": "Comprueba la conexión con la sala y vuelve a intentarlo.",
   "notifications.msg.searchFailed.title": "No se pudo iniciar la búsqueda",
   "notifications.msg.hostFailed.title": "No se pudo crear la partida",
   "notifications.msg.matchDidNotStart.title": "La partida no comenzó",

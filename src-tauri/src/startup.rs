@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use faf_app::App;
 use faf_domain::state::{
-    AuthCommand, NavCommand, ReplayCommand, SessionCommand, SettingsCommand, SettingsEvent, Tab,
+    AuthCommand, NavCommand, ReplayCommand, SessionCommand, SettingsCommand, SettingsEvent,
 };
 use faf_domain::{AppCommand, AppEvent};
 use faf_ipc::shell::FrontendMessage;
@@ -64,24 +64,14 @@ pub(crate) fn replay_argument(argv: &[String]) -> Option<&str> {
 
 /// Hand a replay path to the running client and show it.
 ///
-/// Deliberately `try_dispatch` and not a wait: this is called from the
-/// single-instance callback, which runs on Tauri's main thread, and from
-/// startup. Neither is a place to block on a replay that may take seconds to
-/// prepare.
 pub(crate) fn open_replay_from_argument(app: &tauri::AppHandle, path: &str) {
-    let Some(core) = app.try_state::<Core>() else {
-        tracing::warn!("asked to open a replay before the backend was ready");
-        return;
-    };
-    tracing::info!(%path, "opening a replay handed to the client as an argument");
-    let _ = core
-        .0
-        .try_dispatch(AppCommand::Nav(NavCommand::Select { tab: Tab::Replays }));
-    let _ = core
-        .0
-        .try_dispatch(AppCommand::Replays(ReplayCommand::OpenFile {
+    dispatch_open_argument(
+        app,
+        ReplayCommand::OpenFile {
             path: path.to_string(),
-        }));
+        }
+        .into(),
+    );
 }
 
 /// Hand a `faf://` link to the client, whether it arrived with a second start
@@ -94,14 +84,22 @@ pub(crate) fn open_replay_from_argument(app: &tauri::AppHandle, path: &str) {
 /// `tauri.conf.json`), which any web page can ask it to do, so nothing about
 /// the link is trusted beyond that check.
 pub(crate) fn open_link_from_argument(app: &tauri::AppHandle, url: &str) {
+    dispatch_open_argument(app, NavCommand::OpenLink { url: url.into() }.into());
+}
+
+/// Wait for queue capacity off the main thread. The replay command selects
+/// its tab itself, so navigation only happens once the open reaches the core.
+fn dispatch_open_argument(app: &tauri::AppHandle, command: AppCommand) {
     let Some(core) = app.try_state::<Core>() else {
-        tracing::warn!("asked to open a link before the backend was ready");
+        tracing::warn!("asked to open a file or link before the backend was ready");
         return;
     };
-    tracing::info!(%url, "opening a link handed to the client as an argument");
-    let _ = core.0.try_dispatch(AppCommand::Nav(NavCommand::OpenLink {
-        url: url.to_string(),
-    }));
+    let core = core.0.clone();
+    tauri::async_runtime::spawn(async move {
+        if let Err(reason) = core.dispatch(command).await {
+            tracing::warn!(%reason, "could not queue a file or link from the operating system");
+        }
+    });
 }
 
 /// [`open_replay_from_argument`] for the replay a cold start was opened with.

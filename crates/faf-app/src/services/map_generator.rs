@@ -298,11 +298,16 @@ pub async fn handle(cmd: MapGeneratorCommand, ctx: &ServiceCtx, out: &EventSink)
         MapGeneratorCommand::LoadOptions { version } => load_options(version, ctx, out).await,
         MapGeneratorCommand::CleanUp => {
             crate::runtime::expect_admitted(crate::runtime::Key::MapGenerator);
-            // Read the authoritative persisted setting here rather than
-            // trusting the webview to supply the cleanup exclusion list.
-            let settings = ctx.ports.settings.load().await.unwrap_or_default();
-            let protected_maps = protected_generated_maps(&settings);
-            match ctx.ports.map_generator.clean_up(&protected_maps).await {
+            let result = {
+                let _protection = ctx.settings.generated_map_protection.acquire().await;
+                clean_up_generated_maps(
+                    ctx.ports.settings.as_ref(),
+                    ctx.ports.map_generator.as_ref(),
+                    || out.with_state(|state| protected_generated_maps(&state.settings)),
+                )
+                .await
+            };
+            match result {
                 Ok(0) => services::notifications::add_text(
                     out,
                     NotificationKind::MapGenerated,
@@ -338,8 +343,24 @@ pub async fn handle(cmd: MapGeneratorCommand, ctx: &ServiceCtx, out: &EventSink)
     }
 }
 
-/// The generated maps a clean-up spares: the Maps tab's button and the sweep
-/// as the client exits (`App::sweep_generated_maps`, #720).
+/// Use both sources of protection. Startup may not have populated state yet,
+/// and a favourite or keep entry may have reached state before its disk write.
+/// The caller holds the protection guard through the deletion.
+pub(crate) async fn clean_up_generated_maps(
+    settings: &dyn crate::ports::SettingsPort,
+    generator: &dyn crate::ports::MapGeneratorPort,
+    live_protections: impl FnOnce() -> Vec<String>,
+) -> Result<usize, String> {
+    let saved = settings
+        .load()
+        .await
+        .ok_or("the settings file could not be read")?;
+    let mut protected = protected_generated_maps(&saved);
+    protected.extend(live_protections());
+    generator.clean_up(&protected).await
+}
+
+/// The generated maps a clean-up spares.
 ///
 /// Two ways to be spared, and they mean different things: a favourite is a
 /// map somebody marked in the vault, a kept map is one they asked the
@@ -429,23 +450,29 @@ pub(crate) async fn record_generated_maps(maps: &[String], ctx: &ServiceCtx, out
     if maps.is_empty() {
         return;
     }
-    if out.with_state(|state| state.settings.game.keep_generated_maps) {
+    let keep = {
+        let _protection = ctx.settings.generated_map_protection.acquire().await;
         let before = ctx.settings.merge_and_emit(out, |settings| {
+            if !settings.game.keep_generated_maps {
+                return (None, None);
+            }
             (
-                SettingsEvent::KeptGeneratedMaps {
+                Some(SettingsEvent::KeptGeneratedMaps {
                     map_names: maps.to_vec(),
-                },
-                settings.kept_generated_maps.clone(),
+                }),
+                Some(settings.kept_generated_maps.clone()),
             )
         });
-        let after = out.with_state(|state| state.settings.kept_generated_maps.clone());
-        // The keep list is capped, and a name that falls off it is a map
-        // nobody asked to keep any more. Removing it here rather than leaving
-        // it merely unprotected is the whole point of the cap: the thread that
-        // asked for one had watched a generated-map folder fill a system
-        // drive, and an unprotected map still occupies the disk until somebody
-        // remembers to sweep.
-        evict_generated_maps(&before, &after, ctx, out).await;
+        if let Some(before) = before {
+            // Trim the capped keep list, while still sparing favourites.
+            let protected = out.with_state(|state| protected_generated_maps(&state.settings));
+            evict_generated_maps(&before, &protected, ctx, out).await;
+            true
+        } else {
+            false
+        }
+    };
+    if keep {
         services::settings::persist(ctx, out).await;
     }
     emit_previews(maps, ctx, out).await;
@@ -460,15 +487,17 @@ pub(crate) async fn record_generated_maps(maps: &[String], ctx: &ServiceCtx, out
 /// list rather than on a scan of the folder.
 async fn evict_generated_maps(
     before: &[String],
-    after: &[String],
+    protected: &[String],
     ctx: &ServiceCtx,
     out: &EventSink,
 ) {
-    let kept: std::collections::HashSet<String> =
-        after.iter().map(|name| name.to_ascii_lowercase()).collect();
+    let protected: std::collections::HashSet<String> = protected
+        .iter()
+        .map(|name| name.to_ascii_lowercase())
+        .collect();
     let evicted: Vec<String> = before
         .iter()
-        .filter(|name| !kept.contains(&name.to_ascii_lowercase()))
+        .filter(|name| !protected.contains(&name.to_ascii_lowercase()))
         .cloned()
         .collect();
     if evicted.is_empty() {

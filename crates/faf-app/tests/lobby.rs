@@ -20,6 +20,42 @@ use faf_domain::state::{
 };
 use faf_domain::AppEvent;
 
+#[tokio::test]
+async fn a_refused_contact_change_leaves_the_list_alone_and_reports_failure() {
+    use faf_app::infra::{LobbyClient, TokenStore};
+    use faf_domain::state::{Relation, SocialCommand};
+
+    let (app, app_loop) = App::new(
+        "test",
+        Ports {
+            lobby: Arc::new(LobbyClient::faf(TokenStore::new())),
+            ..fake_ports()
+        },
+    );
+    let task = tokio::spawn(app_loop.run());
+    app.dispatch_and_wait(
+        SocialCommand::SetRelation {
+            player_id: 23,
+            login: "OfflineFixture".into(),
+            relation: Relation::Foe,
+            member: true,
+        }
+        .into(),
+    )
+    .await
+    .unwrap();
+
+    let state = app.snapshot();
+    assert!(state.social.foes.is_empty());
+    assert!(state.social.contacts.entries.is_empty());
+    assert!(state.notifications.items.iter().any(|item| {
+        item.text
+            .as_ref()
+            .is_some_and(|text| text.key == "notifications.msg.contactChangeFailed")
+    }));
+    task.abort();
+}
+
 #[derive(Default)]
 struct RecordingSettings {
     saved: Arc<Mutex<Vec<SettingsState>>>,

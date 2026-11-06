@@ -5,21 +5,16 @@
 //! to the social slice, so the command lives here rather than in
 //! [`services::lobby`](crate::services::lobby): same split as the slices.
 //!
-//! The emit-then-send order matters: the server acknowledges neither command
-//! and does not echo a fresh `social` message, so the optimistic event *is* the
-//! state change as far as this client is concerned. Both reference clients
-//! update their local relation set at the point of action for the same reason
-//! (`py-client`'s `IrcRelationController.add`). If the socket is down the send
-//! is dropped and the optimistic state is wrong until the next `social`
-//! snapshot on reconnect: which is exactly when the server's view arrives and
-//! replaces it wholesale.
+//! The server does not acknowledge individual writes. Publish the optimistic
+//! change only after the lobby accepts all its messages. The next server
+//! snapshot reconciles the list if the connection drops after admission.
 //!
 //! The connection keeps a second copy of the same fact, because it re-sends
 //! the relation lists whenever a `player_info` names an account they were
 //! waiting on: see `PlayerDirectory::note_local_relation`. Without it that
 //! re-send undid whatever the user had just done.
 
-use faf_domain::state::{Contact, Relation, SocialCommand, SocialEvent};
+use faf_domain::state::{Contact, NotificationKind, Relation, SocialCommand, SocialEvent};
 
 use crate::runtime::{EventSink, ServiceCtx};
 
@@ -89,20 +84,22 @@ pub async fn handle(cmd: SocialCommand, ctx: &ServiceCtx, out: &EventSink) {
                 login: (!login.is_empty()).then_some(login),
                 relation,
             };
-            out.emit(SocialEvent::ContactSet {
-                contact: contact.clone(),
+            if !ctx.ports.lobby.set_contact_relation(
+                contact.clone(),
                 member,
-            });
-            if was_opposite {
-                ctx.ports.lobby.set_contact_relation(
-                    Contact {
-                        relation: opposite,
-                        ..contact.clone()
-                    },
-                    false,
+                was_opposite.then_some(opposite),
+            ) {
+                super::notifications::add_required_text(
+                    out,
+                    NotificationKind::Error,
+                    super::notifications::Text::new("notifications.msg.contactChangeFailed"),
+                    "Could not update contacts",
+                    "Check the lobby connection and try again.",
+                    None,
                 );
+                return;
             }
-            ctx.ports.lobby.set_contact_relation(contact, member);
+            out.emit(SocialEvent::ContactSet { contact, member });
         }
         SocialCommand::LookUpLogin { login } => {
             let login = login.trim().to_string();

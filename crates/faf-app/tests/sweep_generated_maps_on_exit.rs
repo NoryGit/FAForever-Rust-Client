@@ -128,8 +128,95 @@ async fn an_unreadable_settings_file_deletes_nothing() {
     let mut ports = fake_ports();
     ports.map_generator = generator.clone();
     ports.settings = Arc::new(UnreadableSettings);
-    let (app, _loop) = App::new("test", ports);
+    let (app, app_loop) = App::new("test", ports);
 
     assert!(app.sweep_generated_maps().await.is_err());
+    let task = tokio::spawn(app_loop.run());
+    app.dispatch_and_wait(faf_domain::state::MapGeneratorCommand::CleanUp.into())
+        .await
+        .unwrap();
     assert!(generator.sweeps.lock().unwrap().is_empty());
+    task.abort();
+}
+
+#[derive(Default)]
+struct SavingSettings {
+    started: tokio::sync::Notify,
+    finish: tokio::sync::Notify,
+}
+
+#[async_trait]
+impl SettingsPort for SavingSettings {
+    async fn load(&self) -> Option<SettingsState> {
+        Some(stored_settings())
+    }
+
+    async fn save(&self, _settings: &SettingsState) -> Result<(), String> {
+        self.started.notify_one();
+        self.finish.notified().await;
+        Ok(())
+    }
+}
+
+#[tokio::test]
+async fn both_sweeps_spare_a_new_favourite_while_its_save_is_pending() {
+    use faf_domain::state::{settings::PreferenceList, MapGeneratorCommand, SettingsCommand};
+
+    let generator = Arc::new(RecordingGenerator::default());
+    let settings = Arc::new(SavingSettings::default());
+    let (app, app_loop) = App::new(
+        "test",
+        faf_app::ports::Ports {
+            map_generator: generator.clone(),
+            settings: settings.clone(),
+            ..fake_ports()
+        },
+    );
+    let task = tokio::spawn(app_loop.run());
+    app.dispatch_and_wait(SettingsCommand::Load.into())
+        .await
+        .unwrap();
+
+    let map = "neroxis_map_generator_1.7.7_just_starred";
+    app.dispatch(
+        SettingsCommand::SetListMember {
+            list: PreferenceList::FavoriteMaps,
+            value: map.into(),
+            member: true,
+        }
+        .into(),
+    )
+    .await
+    .unwrap();
+    tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        settings.started.notified(),
+    )
+    .await
+    .expect("the save started");
+
+    tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        app.sweep_generated_maps().await.unwrap();
+        app.dispatch_and_wait(MapGeneratorCommand::CleanUp.into())
+            .await
+            .unwrap();
+    })
+    .await
+    .expect("both sweeps completed before the save");
+    let sweeps = generator.sweeps.lock().unwrap();
+    assert_eq!(sweeps.len(), 2);
+    for protected in sweeps.iter() {
+        for expected in [
+            "neroxis_map_generator_1.7.7_fav",
+            "neroxis_map_generator_1.7.7_kept",
+            map,
+        ] {
+            assert!(
+                protected.iter().any(|name| name == expected),
+                "unprotected map: {expected}"
+            );
+        }
+    }
+    settings.finish.notify_one();
+    task.abort();
 }

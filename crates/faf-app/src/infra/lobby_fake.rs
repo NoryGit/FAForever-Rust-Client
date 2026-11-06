@@ -13,7 +13,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use faf_domain::state::{
-    AvailableAvatar, Game, GameLaunch, HostGameConfig, MatchmakerQueue, MatchmakingState,
+    AvailableAvatar, Contact, Game, GameLaunch, HostGameConfig, MatchmakerQueue, MatchmakingState,
     PlayerProfile, PlayerVeto, RatingRange, Relation,
 };
 use tokio::sync::mpsc;
@@ -274,7 +274,18 @@ impl LobbyPort for FakeLobby {
 
     /// No-op: the real server sends no acknowledgement either, so the social
     /// service's optimistic event is the whole observable effect.
-    fn set_relation(&self, _player_id: i32, _relation: Relation, _member: bool) {}
+    fn set_contact_relation(
+        &self,
+        _contact: Contact,
+        _member: bool,
+        _remove: Option<Relation>,
+    ) -> bool {
+        self.updates
+            .lock()
+            .unwrap()
+            .as_ref()
+            .is_some_and(|sender| !sender.is_closed())
+    }
 
     fn set_player_vetoes(&self, vetoes: Vec<PlayerVeto>) {
         let Some(tx) = self.updates.lock().unwrap().clone() else {

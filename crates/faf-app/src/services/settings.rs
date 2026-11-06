@@ -35,6 +35,8 @@ pub struct SettingsContext {
     /// Settings commands run concurrently. Serializing the snapshot + write
     /// prevents an older command from reaching disk after a newer one.
     persist: SerialMutation,
+    /// Prevent a favourite or keep-list update from landing during a sweep.
+    pub(crate) generated_map_protection: SerialMutation,
     /// Held across one settings command's read, merge and emit. Commands run
     /// on their own tasks, so two patches could both read the group before
     /// either emitted, and the second would carry the first's field back to
@@ -434,12 +436,18 @@ pub async fn handle(cmd: SettingsCommand, ctx: &ServiceCtx, out: &EventSink) {
             persist(ctx, out).await;
         }
         SettingsCommand::PatchBrowsing { patch } => {
+            let protection = if patch.favorite_maps.is_some() {
+                Some(ctx.settings.generated_map_protection.acquire().await)
+            } else {
+                None
+            };
             merge(ctx, out, |settings| {
                 let mut next = settings.clone();
                 next.browsing = patch.apply_to(next.browsing);
                 let preferences = Box::new(next.normalized().browsing);
                 (SettingsEvent::BrowsingChanged { preferences }, ())
             });
+            drop(protection);
             persist(ctx, out).await;
         }
         SettingsCommand::PatchDiscord { patch } => {
@@ -460,12 +468,18 @@ pub async fn handle(cmd: SettingsCommand, ctx: &ServiceCtx, out: &EventSink) {
             value,
             member,
         } => {
+            let protection = if matches!(list, domain::PreferenceList::FavoriteMaps) {
+                Some(ctx.settings.generated_map_protection.acquire().await)
+            } else {
+                None
+            };
             // Nothing to sync afterwards: none of these lists is held by a
             // port, and the chat service reads the muted players from state.
             merge(ctx, out, |settings| {
                 let event = domain::list_member_changed(settings, list, &value, member);
                 (event, ())
             });
+            drop(protection);
             persist(ctx, out).await;
         }
         SettingsCommand::SetPlayerNameColor { player, color } => {

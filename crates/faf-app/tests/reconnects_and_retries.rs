@@ -168,8 +168,13 @@ impl LobbyPort for RecordingLobby {
     fn set_party_factions(&self, factions: Vec<String>) {
         self.inner.set_party_factions(factions)
     }
-    fn set_relation(&self, player_id: i32, relation: Relation, member: bool) {
-        self.inner.set_relation(player_id, relation, member)
+    fn set_contact_relation(
+        &self,
+        contact: faf_domain::state::Contact,
+        member: bool,
+        remove: Option<Relation>,
+    ) -> bool {
+        self.inner.set_contact_relation(contact, member, remove)
     }
     fn set_player_vetoes(&self, vetoes: Vec<PlayerVeto>) {
         self.inner.set_player_vetoes(vetoes)

@@ -388,12 +388,36 @@ impl LobbyPort for LobbyClient {
         let _ = self.send_frame(party_factions_frame(factions));
     }
 
-    fn set_relation(&self, player_id: i32, relation: Relation, member: bool) {
-        let _ = self.send_frame(relation_frame(player_id, relation, member));
-    }
-
-    fn set_contact_relation(&self, contact: faf_domain::state::Contact, member: bool) {
-        let _ = self.send(Outgoing::ContactRelation(contact, member));
+    fn set_contact_relation(
+        &self,
+        contact: faf_domain::state::Contact,
+        member: bool,
+        remove: Option<Relation>,
+    ) -> bool {
+        let outgoing = self.outgoing.lock().unwrap();
+        let Some(tx) = outgoing.as_ref() else {
+            return false;
+        };
+        let Ok(permits) = tx.try_reserve_many(1 + usize::from(remove.is_some())) else {
+            return false;
+        };
+        let removal = remove.map(|relation| {
+            Outgoing::ContactRelation(
+                faf_domain::state::Contact {
+                    relation,
+                    ..contact.clone()
+                },
+                false,
+            )
+        });
+        for (permit, change) in permits.zip(
+            removal
+                .into_iter()
+                .chain(std::iter::once(Outgoing::ContactRelation(contact, member))),
+        ) {
+            permit.send(change);
+        }
+        true
     }
 
     fn set_player_vetoes(&self, vetoes: Vec<PlayerVeto>) {
@@ -2591,6 +2615,40 @@ fn host_frame(config: HostGameConfig) -> Value {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn contact_switch_needs_space_for_both_frames() {
+        use super::{LobbyClient, LobbyPort, Outgoing, Relation, TokenStore};
+        use faf_domain::state::Contact;
+        use tokio::sync::mpsc;
+
+        let lobby = LobbyClient::faf(TokenStore::new());
+        let contact = Contact {
+            player_id: 7,
+            login: Some("OfflineFixture".into()),
+            relation: Relation::Foe,
+        };
+        let (tx, mut rx) = mpsc::channel(2);
+        assert!(tx
+            .try_send(Outgoing::Frame(serde_json::Value::Null))
+            .is_ok());
+        *lobby.outgoing.lock().unwrap() = Some(tx);
+
+        assert!(!lobby.set_contact_relation(contact.clone(), true, Some(Relation::Friend)));
+        assert!(matches!(rx.try_recv().unwrap(), Outgoing::Frame(_)));
+        assert!(rx.try_recv().is_err());
+
+        assert!(lobby.set_contact_relation(contact, true, Some(Relation::Friend)));
+        let Outgoing::ContactRelation(old, false) = rx.try_recv().unwrap() else {
+            panic!("expected removal of the old friend relation");
+        };
+        let Outgoing::ContactRelation(new, true) = rx.try_recv().unwrap() else {
+            panic!("expected the new foe relation");
+        };
+        assert_eq!(old.relation, Relation::Friend);
+        assert_eq!(new.relation, Relation::Foe);
+        assert_eq!(new.player_id, old.player_id);
+    }
+
     #[test]
     fn contacts_preserve_unresolved_ids_and_never_turn_lookups_into_online_profiles() {
         let mut directory = super::PlayerDirectory::default();

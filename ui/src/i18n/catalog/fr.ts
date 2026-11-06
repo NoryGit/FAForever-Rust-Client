@@ -246,6 +246,8 @@ export const fr: Partial<Record<MessageKey, Message>> = {
   "notifications.msg.cannotInvite.title": "Invitation impossible pour le moment",
   "notifications.msg.cannotInvite.body": "Arrêtez la recherche avant d'inviter quelqu'un dans le groupe.",
   "notifications.msg.cannotJoinParty.title": "Impossible de rejoindre le groupe",
+  "notifications.msg.contactChangeFailed.title": "Impossible de mettre à jour les contacts",
+  "notifications.msg.contactChangeFailed.body": "Vérifiez la connexion au salon et réessayez.",
   "notifications.msg.searchFailed.title": "Impossible de lancer la recherche",
   "notifications.msg.hostFailed.title": "Impossible d'héberger la partie",
   "notifications.msg.matchDidNotStart.title": "Le match n'a pas démarré",
