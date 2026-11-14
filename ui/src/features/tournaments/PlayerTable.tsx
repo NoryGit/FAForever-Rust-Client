@@ -5,6 +5,7 @@
 // which is everybody a team never took. They were drifting apart as two
 // hand-written lists, and the difference between them is two optional columns.
 
+import type { ReactNode } from "react";
 import type { PlayerSummary, Tourney, TourneyPlayer, TourneyTeam } from "../../ipc/bindings";
 import { Icon } from "../../design-system/Icon";
 import { useTranslation } from "../../i18n/useTranslation";
@@ -24,6 +25,11 @@ interface PlayerTableProps {
   showTeam?: boolean;
   /** Seed, check-in and placing. Off before there is anything to say. */
   showStanding?: boolean;
+  /**
+   * A button at the end of each row, such as the draft's Pick, with the
+   * column's name for a screen reader. Omitted where a row offers nothing.
+   */
+  action?: { heading: string; render: (player: TourneyPlayer) => ReactNode };
 }
 
 export function PlayerTable({
@@ -32,6 +38,7 @@ export function PlayerTable({
   players,
   showTeam = false,
   showStanding = false,
+  action,
 }: PlayerTableProps) {
   const { t } = useTranslation();
   // Sent only to organisers and to people signed up here, so a match can be
@@ -64,6 +71,7 @@ export function PlayerTable({
             <th scope="col">{t("tournaments.entrants.ratingColumn")}</th>
             {showTeam && <th scope="col">{t("tournaments.entrants.team")}</th>}
             {showStanding && <th scope="col">{t("tournaments.entrants.standing")}</th>}
+            {action && <th scope="col" aria-label={action.heading} />}
           </tr>
         </thead>
         <tbody>
@@ -150,6 +158,7 @@ export function PlayerTable({
                     </span>
                   </td>
                 )}
+                {action && <td className="tournament-entrants-action">{action.render(player)}</td>}
               </tr>
             );
           })}

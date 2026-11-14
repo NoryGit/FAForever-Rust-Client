@@ -9,12 +9,14 @@
 // top so many by rating; during it, whoever is on the clock picks from the
 // pool.
 
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { Button } from "../../../design-system/Button";
-import type { CaptainMode, PlayerSummary, Tourney, TourneyPlayer } from "../../../ipc/bindings";
+import type { CaptainMode, PlayerSummary, Tourney, TourneyPlayer, TourneyTeam } from "../../../ipc/bindings";
 import type { OrganiserActions, TeamActions } from "../tourneyActions";
 import { useTranslation } from "../../../i18n/useTranslation";
+import { EntrantName } from "../EntrantName";
 import { PlayerChip } from "../PlayerChip";
+import { PlayerTable } from "../PlayerTable";
 import {
   draftTurn,
   isLegalFrom,
@@ -41,7 +43,13 @@ export function DraftPanel(props: DraftPanelProps) {
   const [mode, setMode] = useState<CaptainMode>(event.captainMode);
   const [count, setCount] = useState(event.captainCount >= 2 ? String(event.captainCount) : "");
 
-  const nameOf = (player: TourneyPlayer) => {
+  // A name is the way to the player's card, here as everywhere else in the tab.
+  const nameOf = (player: TourneyPlayer) => (
+    <EntrantName name={player.name} fafId={player.fafId} profile={profileOf(props.profiles, player)} />
+  );
+  // Inside a checkbox label a button would take the click the box should, so
+  // the captains list keeps the plain chip.
+  const chipOf = (player: TourneyPlayer) => {
     const profile = profileOf(props.profiles, player);
     return profile ? <PlayerChip player={profile} overrideName={player.name} /> : player.name;
   };
@@ -144,7 +152,7 @@ export function DraftPanel(props: DraftPanelProps) {
                       )
                     }
                   />
-                  <span>{nameOf(player)}</span>
+                  <span>{chipOf(player)}</span>
                 </label>
                 {player.rating !== null && <span className="muted">{player.rating}</span>}
               </li>
@@ -181,6 +189,12 @@ export function DraftPanel(props: DraftPanelProps) {
   const turn = draftTurn(event);
   const pool = undrafted(event);
   const mine = mayPick(event);
+  // Who picks after the team on the clock, so a captain can see their turn
+  // coming. The service's order, walked as it is.
+  const upNext = event.draft.order
+    .slice(event.draft.current + 1, event.draft.current + 1 + UP_NEXT)
+    .map(teamName);
+  const teams = draftTeams(event);
 
   return (
     <section className="tournament-draft">
@@ -206,26 +220,138 @@ export function DraftPanel(props: DraftPanelProps) {
           </Button>
         )}
       </header>
+      {turn !== null && upNext.length > 0 && (
+        <p className="muted tournament-draft-next">
+          {t("tournaments.draft.upNext", { teams: upNext.join(" → ") })}
+        </p>
+      )}
 
+      {/* What every captain has so far: the thing a pick is weighed against. */}
+      <ul className="tournament-team-grid tournament-draft-teams">
+        {teams.map((team) => (
+          <DraftTeamCard
+            key={team.id}
+            event={event}
+            team={team}
+            name={teamName(team.id)}
+            onClock={team.id === turn}
+            nameOf={nameOf}
+          />
+        ))}
+      </ul>
+
+      <h5 className="tournament-draft-pool-heading">
+        {t("tournaments.draft.poolHeading", { count: pool.length })}
+      </h5>
       {pool.length === 0 ? (
         <p className="muted">{t("tournaments.draft.poolEmpty")}</p>
       ) : (
-        <ul className="tournament-entrant-list">
-          {pool.map((player) => (
-            <li className="tournament-entrant" key={player.id}>
-              <span className="tournament-entrant-name">{nameOf(player)}</span>
-              {player.rating !== null && <span className="muted">{player.rating}</span>}
-              {/* Live only for whoever is on the clock. Everyone else reads the
-                  same pool, which is how a draft is followed. */}
-              {mine && (
-                <Button disabled={busy} onClick={() => props.teams.draftPick(player.id)}>
-                  {t("tournaments.draft.pick")}
-                </Button>
-              )}
-            </li>
-          ))}
-        </ul>
+        // Ranked by the event's own rating, highest first, with every name a
+        // way to the player's card. The Pick is live only for whoever is on
+        // the clock; everyone else reads the same pool, which is how a draft
+        // is followed.
+        <PlayerTable
+          event={event}
+          profiles={props.profiles}
+          players={pool}
+          action={
+            mine
+              ? {
+                  heading: t("tournaments.draft.pick"),
+                  render: (player) => (
+                    <Button disabled={busy} onClick={() => props.teams.draftPick(player.id)}>
+                      {t("tournaments.draft.pick")}
+                    </Button>
+                  ),
+                }
+              : undefined
+          }
+        />
       )}
     </section>
+  );
+}
+
+/** How many teams after the one on the clock the draft names. */
+const UP_NEXT = 3;
+
+/**
+ * The teams in the order they first pick: the order captains read the draft
+ * in. A team the order never names (none, in a well-formed draft) goes last.
+ */
+function draftTeams(event: Tourney): TourneyTeam[] {
+  const order = event.draft?.order ?? [];
+  const first = (team: TourneyTeam) => {
+    const at = order.indexOf(team.id);
+    return at === -1 ? Number.MAX_SAFE_INTEGER : at;
+  };
+  return [...event.teams].sort((left, right) => first(left) - first(right));
+}
+
+/** The mean of the ratings that are there, rounded; `null` when none is. */
+function averageRating(players: TourneyPlayer[]): number | null {
+  const rated = players.flatMap((player) => (player.rating === null ? [] : [player.rating]));
+  if (rated.length === 0) return null;
+  return Math.round(rated.reduce((sum, rating) => sum + rating, 0) / rated.length);
+}
+
+interface DraftTeamCardProps {
+  event: Tourney;
+  team: TourneyTeam;
+  name: string;
+  onClock: boolean;
+  nameOf: (player: TourneyPlayer) => ReactNode;
+}
+
+/** One captain's team so far: who is on it, how strong, and its open places. */
+function DraftTeamCard({ event, team, name, onClock, nameOf }: DraftTeamCardProps) {
+  const { t } = useTranslation();
+  const members = team.playerIds.flatMap((id) => {
+    const player = event.players.find((held) => held.id === id);
+    return player === undefined ? [] : [player];
+  });
+  // Captain first, then in the order they were picked.
+  const roster = [
+    ...members.filter((player) => player.id === team.captainId),
+    ...members.filter((player) => player.id !== team.captainId),
+  ];
+  const average = averageRating(roster);
+  const open = Math.max(0, event.teamSize - roster.length);
+  const classes = [
+    "tournament-team-card",
+    onClock ? "is-on-clock" : "",
+    team.id === event.viewer.memberTeamId ? "is-mine" : "",
+  ].filter((name) => name !== "");
+  return (
+    <li className={classes.join(" ")}>
+      <div className="tournament-team-card-head">
+        <div className="tournament-team-card-title">
+          <span className="tournament-team-name">{name}</span>
+          {onClock && <span className="tournament-badge is-running">{t("tournaments.draft.picking")}</span>}
+        </div>
+        <div className="tournament-team-card-sub tournament-team-rating">
+          <span className="mono">{t("tournaments.teams.size", { have: roster.length, want: event.teamSize })}</span>
+          {average !== null && <span className="mono">{t("tournaments.draft.average", { rating: average })}</span>}
+        </div>
+      </div>
+      <ul className="tournament-draft-roster">
+        {roster.map((player) => (
+          <li key={player.id}>
+            <span className="tournament-entrant-name">
+              {nameOf(player)}
+              {player.id === team.captainId && (
+                <span className="tournament-badge">{t("tournaments.teams.captain")}</span>
+              )}
+            </span>
+            <span className="mono muted">{player.rating ?? "–"}</span>
+          </li>
+        ))}
+        {Array.from({ length: open }, (_, index) => (
+          <li key={`open-${index}`} className="is-open muted">
+            {t("tournaments.draft.openPlace")}
+          </li>
+        ))}
+      </ul>
+    </li>
   );
 }

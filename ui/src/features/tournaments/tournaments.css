@@ -2539,6 +2539,56 @@
   margin: 0;
 }
 
+.tournament-draft-next {
+  margin: 0;
+}
+
+.tournament-draft-pool-heading {
+  margin: var(--space-2) 0 0;
+}
+
+/* The team picking now, marked like a live match. */
+.tournament-team-card.is-on-clock {
+  border-color: var(--color-accent);
+}
+
+.tournament-draft-roster {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.tournament-draft-roster li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  min-height: 24px;
+  min-width: 0;
+}
+
+.tournament-draft-roster .tournament-entrant-name {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+/* An open place reads as a gap in the roster, not as a person. */
+.tournament-draft-roster li.is-open {
+  font-size: 12px;
+  font-style: italic;
+}
+
+.tournament-entrants td.tournament-entrants-action {
+  width: 1%;
+  white-space: nowrap;
+  text-align: right;
+}
+
 /* A free-for-all lobby. A list of entrants rather than a pair, so it reads
    down rather than across, and the scores line up on the right. */
 .tournament-ffa-lobby {
