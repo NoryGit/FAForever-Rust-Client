@@ -2992,6 +2992,7 @@ async fn reading_the_announcements_clears_the_badge_for_the_account() {
         event.unread_news() > 0,
         "the fixture event has announcements nobody has read"
     );
+    let mut events = app.subscribe();
 
     app.dispatch(
         TourneyRead::MarkNewsRead {
@@ -3006,6 +3007,11 @@ async fn reading_the_announcements_clears_the_badge_for_the_account() {
     let state = app.snapshot().tourney;
     assert!(state.action_error.is_none(), "{:?}", state.action_error);
     assert_eq!(state.detail.expect("still open").unread_news(), 0);
+    // Quietly: opening the announcements must not put the pane through
+    // "loading", which blanked the event and made the page jump.
+    while let Ok(event) = events.try_recv() {
+        assert_ne!(event, AppEvent::Tourney(TourneyEvent::DetailLoading));
+    }
 }
 
 #[tokio::test]

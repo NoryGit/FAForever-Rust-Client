@@ -163,7 +163,10 @@ pub(super) async fn mark_news_read(tournament_id: String, ctx: &ServiceCtx, out:
         tracing::warn!(%error, "could not mark the tournament news as read");
         return;
     }
-    load_detail(&tournament_id, ctx, out).await;
+    // The silent re-read, so the badge clears without the pane going through
+    // "loading": announced, it blanked the event and drew it again, and the
+    // whole page jumped the moment the announcements were opened.
+    refresh_detail(tournament_id, ctx, out).await;
 }
 
 /// The events this account may import maps from: `TourneyRead::LoadCopySources`.
